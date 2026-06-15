@@ -1,0 +1,122 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+  --font-sans: "Inter", "Noto Sans Thai", system-ui, -apple-system, "Segoe UI",
+    Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, "Menlo", monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background: #020617;
+  color: #f8fafc;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Subtle ambient gradient at the top of the page */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0 0 auto 0;
+  height: 420px;
+  background: radial-gradient(
+      800px circle at 20% 0%,
+      rgba(34, 197, 94, 0.08),
+      transparent 60%
+    ),
+    radial-gradient(
+      700px circle at 80% 0%,
+      rgba(167, 139, 250, 0.06),
+      transparent 60%
+    );
+  pointer-events: none;
+  z-index: 0;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+/* Scrollbars */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #1e293b;
+  border-radius: 8px;
+  border: 2px solid #020617;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #334155;
+}
+
+@layer components {
+  .panel {
+    @apply rounded-2xl border border-bg-line bg-bg-surface/80 backdrop-blur shadow-card;
+  }
+  .panel-raised {
+    @apply rounded-2xl border border-bg-line bg-bg-raised/80 backdrop-blur shadow-card;
+  }
+  .chip {
+    @apply inline-flex items-center gap-1.5 rounded-md border border-bg-line bg-bg-raised/60 px-2 py-0.5 text-xs font-medium;
+  }
+  .stat-number {
+    @apply font-mono tabular-nums tracking-tight;
+  }
+  .text-ink {
+    color: #f8fafc;
+  }
+  .text-ink-muted {
+    color: #94a3b8;
+  }
+  .text-ink-subtle {
+    color: #64748b;
+  }
+  /* Skeleton shimmer */
+  .skeleton {
+    background: linear-gradient(
+      90deg,
+      rgba(255, 255, 255, 0.04) 0%,
+      rgba(255, 255, 255, 0.08) 50%,
+      rgba(255, 255, 255, 0.04) 100%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 1.6s linear infinite;
+  }
+  /* Focus ring */
+  .focus-ring {
+    @apply outline-none ring-offset-2 ring-offset-bg-base focus-visible:ring-2 focus-visible:ring-gain/60;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
