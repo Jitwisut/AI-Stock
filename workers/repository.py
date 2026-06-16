@@ -18,7 +18,16 @@ logger = logging.getLogger(__name__)
 def _engine(database_url: str):
     from sqlalchemy import create_engine
 
-    return create_engine(database_url, pool_pre_ping=True)
+    return create_engine(_normalize_database_url(database_url), pool_pre_ping=True)
+
+
+def _normalize_database_url(database_url: str) -> str:
+    """Use psycopg v3 even when hosted providers give a plain postgres URL."""
+    if database_url.startswith("postgresql://"):
+        return database_url.replace("postgresql://", "postgresql+psycopg://", 1)
+    if database_url.startswith("postgres://"):
+        return database_url.replace("postgres://", "postgresql+psycopg://", 1)
+    return database_url
 
 
 def database_available(database_url: str) -> bool:

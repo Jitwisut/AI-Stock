@@ -21,6 +21,7 @@ from workers.scanner.fetch_prices import (
 from workers.scanner import fetch_stocks
 from workers.scanner.fetch_stocks import fetch_surge_stock_universe
 from workers.data_models import SignalScore, Stock
+from workers.repository import _normalize_database_url
 
 
 def _reset_settings(monkeypatch, **env: str) -> None:
@@ -92,6 +93,21 @@ def test_polygon_snapshot_mapping() -> None:
     assert snapshot.previous_close == 145.0
     assert snapshot.relative_volume == 2.0
     assert snapshot.premarket_gap_percent > 0
+
+
+def test_database_url_defaults_to_psycopg_v3_driver() -> None:
+    assert (
+        _normalize_database_url("postgresql://user:pass@example.neon.tech/neondb?sslmode=require")
+        == "postgresql+psycopg://user:pass@example.neon.tech/neondb?sslmode=require"
+    )
+    assert (
+        _normalize_database_url("postgres://user:pass@example.neon.tech/neondb")
+        == "postgresql+psycopg://user:pass@example.neon.tech/neondb"
+    )
+    assert (
+        _normalize_database_url("postgresql+psycopg://user:pass@example.neon.tech/neondb")
+        == "postgresql+psycopg://user:pass@example.neon.tech/neondb"
+    )
 
 
 def test_production_market_provider_never_uses_mock_fallback(monkeypatch) -> None:
