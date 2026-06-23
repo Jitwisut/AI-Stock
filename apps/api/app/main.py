@@ -237,3 +237,127 @@ def stocks() -> list[dict]:
 @app.get("/settings/status", response_model=SettingsStatusOut)
 def settings_status() -> dict:
     return get_settings_status()
+
+
+# ----------------------------------------------------------------------
+# Telegram Bot Webhook — รับ message จากผู้ใช้แล้วตอบกลับ
+# ----------------------------------------------------------------------
+
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+def _format_surge_line(signal: dict, index: int) -> str:
+    """แปลง surge signal dict เป็นข้อความบรรทัดเดียว."""
+    grade = (signal.get("surge_grade") or {}).get("grade", "-")
+    change = signal.get("premarket_gap_percent", 0.0)
+    rel_vol = signal.get("relative_volume", 0.0)
+    price = signal.get("latest_price", 0.0)
+    return f"{index}. {signal.get('symbol', '?')} [{grade}] {change:+.1f}% · vol {rel_vol:.1f}x · ${price:.2f}"
+
+
+async def _handle_bot_command(command: str, chat_id: str) -> None:
+    """ตอบกลับคำสั่งจากผู้ใช้ใน Telegram."""
+    from workers.alerts.telegram import TelegramClient
+    from workers.config import get_settings
+    from workers.services import get_longterm_signal_dicts, get_surge_signal_dicts
+
+    settings = get_settings()
+    telegram = TelegramClient(settings.telegram_bot_token, settings.telegram_chat_id)
+    if not telegram.is_configured:
+        return
+
+    cmd = command.strip().lower()
+    try:
+        if cmd in ("/surge", "/surges", "/ziing", "/ซิ่ง"):
+            signals = get_surge_signal_dicts(limit=10)
+            lines = ["🚀 หุ้นซิ่ง Top 10\n"]
+            if signals:
+                for i, s in enumerate(signals, 1):
+                    lines.append(_format_surge_line(s, i))
+            else:
+                lines.append("— ยังไม่พบหุ้นที่เข้าเกณฑ์ —")
+            await telegram.send_message("\n".join(lines))
+
+        elif cmd in ("/longterm", "/long", "/lt", "/ระยะยาว"):
+            picks = get_longterm_signal_dicts(limit=10)
+            lines = ["📈 หุ้นน่าสนใจระยะยาว Top 10\n"]
+            if picks:
+                for i, p in enumerate(picks, 1):
+                    lines.append(
+                        f"{i}. {p['symbol']} [{p['grade']}] คะแนน {p['score']:.0f} · 6 ด. {p['return_6m_percent']:+.0f}% · ${p['price']:.2f}"
+                    )
+                    reasons = p.get("reasons") or []
+                    if reasons:
+                        lines.append(f"   • {reasons[0]}")
+            else:
+                lines.append("— ยังไม่พบหุ้นที่เข้าเกณฑ์ —")
+            await telegram.send_message("\n".join(lines))
+
+        elif cmd in ("/digest", "/summary", "/สรุป"):
+            from workers.alerts.digest import build_daily_digest
+
+            await telegram.send_message(build_daily_digest())
+
+        elif cmd in ("/start", "/help"):
+            help_text = (
+                "🤖 คำสั่งที่ใช้ได้:\n\n"
+                "/surge — หุ้นซิ่ง Top 10\n"
+                "/longterm — หุ้นน่าสนใจระยะยาว Top 10\n"
+                "/digest — สรุปรายวัน (ซิ่ง + ระยะยาว)\n"
+                "/help — ข้อความนี้"
+            )
+            await telegram.send_message(help_text)
+
+        else:
+            await telegram.send_message(
+                "❓ ไม่รู้จักคำสั่งนี้ ลอง /help ดูคำสั่งที่ใช้ได้"
+            )
+    except Exception as exc:
+        logger.exception("bot command failed: %s", exc)
+        try:
+            await telegram.send_message(f"⚠️ เกิดข้อผิดพลาด: {exc}")
+        except Exception:
+            pass
+
+
+@app.post("/telegram/webhook")
+async def telegram_webhook(update: dict) -> dict:
+    """Telegram Bot API webhook — รับ message จากผู้ใช้แล้วตอบกลับ.
+
+    ตั้งค่า:
+      curl -X POST "https://api.telegram.org/bot<TOKEN>/setWebhook" \\
+           -d "url=https://ai-stock-e6ks.vercel.app/telegram/webhook"
+    """
+    message = update.get("message") or update.get("edited_message")
+    if not message:
+        return {"ok": True}
+
+    text = (message.get("text") or "").strip()
+    chat = message.get("chat") or {}
+    chat_id = str(chat.get("id", ""))
+
+    if not text or not chat_id:
+        return {"ok": True}
+
+    await _handle_bot_command(text, chat_id)
+    return {"ok": True}
+
+
+@app.get("/telegram/set-webhook")
+async def telegram_set_webhook(url: Optional[str] = None) -> dict:
+    """ตั้ง webhook ให้บอท (เรียกครั้งเดียวหลัง deploy)."""
+    import httpx
+
+    from workers.config import get_settings
+
+    settings = get_settings()
+    if not settings.telegram_bot_token:
+        return {"status": "no_token"}
+
+    target_url = url or "https://ai-stock-e6ks.vercel.app/telegram/webhook"
+    api_url = f"https://api.telegram.org/bot{settings.telegram_bot_token}/setWebhook"
+    async with httpx.AsyncClient(timeout=20) as client:
+        resp = await client.post(api_url, json={"url": target_url})
+        return {"status": "set", "url": target_url, "telegram_response": resp.json()}
