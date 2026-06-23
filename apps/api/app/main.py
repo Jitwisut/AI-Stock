@@ -131,7 +131,7 @@ async def deploy_notify_endpoint(
     commit_msg = os.environ.get("VERCEL_GIT_COMMIT_MESSAGE", "")
 
     if commit_sha:
-        parts = [f"`{commit_sha[:7]}`"]
+        parts = [f"<code>{commit_sha[:7]}</code>"]
         if commit_ref:
             parts.append(f"({commit_ref})")
         if commit_msg:
@@ -150,7 +150,7 @@ async def deploy_notify_endpoint(
         now = datetime.now(timezone(timedelta(hours=7)))
 
     text = (
-        "🚀 *Deploy สำเร็จ!*\n\n"
+        "🚀 <b>Deploy สำเร็จ!</b>\n\n"
         f"⏰ {now.strftime('%d/%m/%Y %H:%M')} (Asia/Bangkok)\n"
         f"📦 Commit: {git_info}\n\n"
         "✅ บอทพร้อมส่งหุ้นซิ่ง + หุ้นระยะยาวเข้า chat นี้"
@@ -159,7 +159,7 @@ async def deploy_notify_endpoint(
     if not telegram.is_configured:
         return {"status": "telegram_not_configured"}
 
-    sent = await telegram.send_message(text, parse_mode="Markdown")
+    sent = await telegram.send_message(text, parse_mode="HTML")
     return {"status": "sent" if sent else "failed", "sent": sent}
 
 
