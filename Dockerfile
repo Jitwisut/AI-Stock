@@ -5,4 +5,5 @@ WORKDIR /app
 COPY . .
 RUN pip install --no-cache-dir -e .
 
-CMD ["python", "-m", "workers.main"]
+# Default: run API. Override with `command:` in docker-compose for worker/beat.
+CMD ["uvicorn", "apps.api.app.main:app", "--host", "0.0.0.0", "--port", "8000"]
