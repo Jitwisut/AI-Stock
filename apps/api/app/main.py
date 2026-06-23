@@ -91,6 +91,22 @@ async def run_scan_endpoint(
     return enqueue_scan_job(kind=kind, send_telegram=send_telegram)
 
 
+@app.post("/alerts/daily-digest")
+async def daily_digest_endpoint(
+    surge_limit: int = Query(default=5, ge=1, le=20),
+    longterm_limit: int = Query(default=5, ge=1, le=20),
+    _: None = Depends(require_admin_api_key),
+) -> dict:
+    """Triggered by Vercel Cron Jobs — ส่งสรุปรายวันเข้า Telegram.
+
+    Vercel Cron เรียก endpoint นี้ตอน 08:00 และ 20:00 (Asia/Bangkok)
+    ดู vercel.json → crons[]
+    """
+    from workers.alerts.digest import send_daily_digest
+
+    return await send_daily_digest(surge_limit=surge_limit, longterm_limit=longterm_limit)
+
+
 @app.get("/signals/scan", response_model=ScanRunOut)
 async def scan_signals(
     send_telegram: bool = False,
