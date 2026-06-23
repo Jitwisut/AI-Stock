@@ -107,6 +107,52 @@ async def daily_digest_endpoint(
     return await send_daily_digest(surge_limit=surge_limit, longterm_limit=longterm_limit)
 
 
+@app.post("/alerts/deploy-notify")
+async def deploy_notify_endpoint(
+    _: None = Depends(require_admin_api_key),
+) -> dict:
+    """Vercel Deploy Hook เรียกเมื่อ deploy สำเร็จ — ส่งข้อความ "พร้อมแล้ว" เข้า Telegram.
+
+    ตั้งค่า: Vercel → Settings → Git → Deploy Hooks → สร้าง hook ชี้มาที่
+    https://ai-stock-e6ks.vercel.app/alerts/deploy-notify
+    แล้วใส่ header x-admin-api-key = ADMIN_API_KEY ของคุณ
+    """
+    import os
+
+    from workers.alerts.telegram import TelegramClient
+    from workers.config import get_settings
+
+    settings = get_settings()
+    telegram = TelegramClient(settings.telegram_bot_token, settings.telegram_chat_id)
+
+    # ใช้ Vercel env (VERCEL_GIT_COMMIT_SHA) ดึง commit info แทน git CLI
+    commit_sha = os.environ.get("VERCEL_GIT_COMMIT_SHA", "")
+    commit_msg = os.environ.get("VERCEL_GIT_COMMIT_MESSAGE", "")
+    git_info = f"`{commit_sha[:7]}` {commit_msg}" if commit_sha else "(no commit info)"
+
+    from datetime import datetime, timedelta, timezone
+
+    try:
+        from zoneinfo import ZoneInfo
+
+        now = datetime.now(ZoneInfo("Asia/Bangkok"))
+    except Exception:
+        now = datetime.now(timezone(timedelta(hours=7)))
+
+    text = (
+        "🚀 *Deploy สำเร็จ!*\n\n"
+        f"⏰ {now.strftime('%d/%m/%Y %H:%M')} (Asia/Bangkok)\n"
+        f"📦 Commit: {git_info}\n\n"
+        "✅ บอทพร้อมส่งหุ้นซิ่ง + หุ้นระยะยาวเข้า chat นี้"
+    )
+
+    if not telegram.is_configured:
+        return {"status": "telegram_not_configured"}
+
+    sent = await telegram.send_message(text)
+    return {"status": "sent" if sent else "failed", "sent": sent}
+
+
 @app.get("/signals/scan", response_model=ScanRunOut)
 async def scan_signals(
     send_telegram: bool = False,
