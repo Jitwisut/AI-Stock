@@ -10,7 +10,7 @@ class TelegramClient:
     def is_configured(self) -> bool:
         return bool(self.bot_token)
 
-    async def send_message(self, text: str, chat_id: str | None = None) -> bool:
+    async def send_message(self, text: str, chat_id: str | None = None, parse_mode: str | None = None) -> bool:
         if not self.is_configured:
             return False
 
@@ -22,6 +22,8 @@ class TelegramClient:
             "text": text,
             "disable_web_page_preview": True,
         }
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
         async with httpx.AsyncClient(timeout=20) as client:
             response = await client.post(url, json=payload)
             response.raise_for_status()

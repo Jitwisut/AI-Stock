@@ -125,10 +125,20 @@ async def deploy_notify_endpoint(
     settings = get_settings()
     telegram = TelegramClient(settings.telegram_bot_token, settings.telegram_chat_id)
 
-    # ใช้ Vercel env (VERCEL_GIT_COMMIT_SHA) ดึง commit info แทน git CLI
+    # ใช้ Vercel env ดึง commit info (มีให้ที่ runtime สำหรับ Deploy Hook)
     commit_sha = os.environ.get("VERCEL_GIT_COMMIT_SHA", "")
+    commit_ref = os.environ.get("VERCEL_GIT_COMMIT_REF", "")
     commit_msg = os.environ.get("VERCEL_GIT_COMMIT_MESSAGE", "")
-    git_info = f"`{commit_sha[:7]}` {commit_msg}" if commit_sha else "(no commit info)"
+
+    if commit_sha:
+        parts = [f"`{commit_sha[:7]}`"]
+        if commit_ref:
+            parts.append(f"({commit_ref})")
+        if commit_msg:
+            parts.append(commit_msg)
+        git_info = " ".join(parts)
+    else:
+        git_info = "(no commit info)"
 
     from datetime import datetime, timedelta, timezone
 
@@ -149,7 +159,7 @@ async def deploy_notify_endpoint(
     if not telegram.is_configured:
         return {"status": "telegram_not_configured"}
 
-    sent = await telegram.send_message(text)
+    sent = await telegram.send_message(text, parse_mode="Markdown")
     return {"status": "sent" if sent else "failed", "sent": sent}
 
 
