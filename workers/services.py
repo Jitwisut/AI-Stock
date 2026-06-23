@@ -358,26 +358,38 @@ def get_latest_signal_dicts(limit: int = 5) -> list[dict]:
 
 
 def get_surge_signal_dicts(limit: int = 10) -> list[dict]:
-    """หุ้น "ซิ่ง" สำหรับสายถือไว-ออกไว — จัดอันดับด้วย surge_score
+    """หุ้น "ซิ่ง" สำหรับสายถือไว-ออกไว — DB-first (เร็ว <1 วิ) fallback สแกนสดเฉพาะ dev.
 
-    ใช้ pool เดียวกับหน้าแดชบอร์ด (DB-first แล้ว fallback เป็น cache สแกนสด)
-    เพื่อไม่ให้สแกนทั้ง universe ซ้ำ แล้วเรียงใหม่ตาม surge_score
+    บน production (Vercel + Neon) อ่านจากฐานข้อมูลที่ Celery beat บน Railway
+    สแกนเก็บไว้ตอน 21:45 TH ทุกวัน — ไม่ต้องสแกนสดซึ่งใช้เวลา 30-60 วิ
     """
+    settings = get_settings()
+    from workers.repository import latest_signals_by_kind
+
+    rows = latest_signals_by_kind(settings.database_url, kind="surge", limit=limit)
+    if rows:
+        return rows[:limit]
+
+    # Fallback: สแกนสด (เฉพาะ dev / staging)
+    if settings.app_env != "production":
+        return _surge_pool_fallback(limit)
+    return []
+
+
+def _surge_pool_fallback(limit: int) -> list[dict]:
+    """สแกนสด surge pool (ใช้ตอน dev หรือไม่มี DB)."""
     pool = _serialized_surge_pool()
 
     enriched: list[dict] = []
     for row in pool:
         item = dict(row)
         item.setdefault("surge_score", round(surge_score(item), 2))
-        # DB rows ไม่มีฟิลด์ surge — เติมให้ครบ (signal_to_dict ใส่มาให้แล้ว)
         if not item.get("surge_grade"):
             item["surge_grade"] = surge_grade(item)
         if not item.get("surge_plan"):
             item["surge_plan"] = surge_plan(item)
         enriched.append(item)
 
-    # เรียงตามเกรดก่อน (S>A>B>C) แล้วค่อย surge_score เพื่อให้อันดับบนสุดเป็นตัวที่
-    # องค์ประกอบครบจริง ไม่ใช่ตัววอลุ่มสูงแต่ราคานิ่ง
     grade_rank = {"S": 0, "A": 1, "B": 2, "C": 3}
     enriched.sort(
         key=lambda item: (
@@ -419,12 +431,24 @@ def _longterm_pool(force: bool = False) -> list[dict]:
 
 
 def get_longterm_signal_dicts(limit: int = 10) -> list[dict]:
-    """หุ้นน่าสนใจสำหรับลงทุนระยะยาว เรียงตามคะแนนเทรนด์."""
+    """หุ้นน่าสนใจสำหรับลงทุนระยะยาว — DB-first (เร็ว <1 วิ) fallback Redis/dev."""
     settings = get_settings()
-    if settings.app_env == "production":
-        cached = _redis_get_json("stock-radar:longterm:latest")
-        return (cached or [])[:limit]
-    return _longterm_pool()[:limit]
+    from workers.repository import latest_signals_by_kind
+
+    # DB-first: Celery beat scan ตอน 07:30 TH เก็บใน signals table
+    rows = latest_signals_by_kind(settings.database_url, kind="longterm", limit=limit)
+    if rows:
+        return rows[:limit]
+
+    # Fallback: Redis cache (Railway worker writes here)
+    cached = _redis_get_json("stock-radar:longterm:latest")
+    if cached:
+        return cached[:limit]
+
+    # Last resort: scan สด (เฉพาะ dev/staging)
+    if settings.app_env != "production":
+        return _longterm_pool()[:limit]
+    return []
 
 
 def list_signal_dicts(

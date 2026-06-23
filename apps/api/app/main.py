@@ -108,14 +108,11 @@ async def daily_digest_endpoint(
 
 
 @app.post("/alerts/deploy-notify")
-async def deploy_notify_endpoint(
-    _: None = Depends(require_admin_api_key),
-) -> dict:
-    """Vercel Deploy Hook เรียกเมื่อ deploy สำเร็จ — ส่งข้อความ "พร้อมแล้ว" เข้า Telegram.
+async def deploy_notify_endpoint() -> dict:
+    """Deploy Hook — ส่งข้อความ "พร้อมแล้ว" เข้า Telegram ทุกครั้งที่ deploy สำเร็จ.
 
-    ตั้งค่า: Vercel → Settings → Git → Deploy Hooks → สร้าง hook ชี้มาที่
-    https://ai-stock-e6ks.vercel.app/alerts/deploy-notify
-    แล้วใส่ header x-admin-api-key = ADMIN_API_KEY ของคุณ
+    ใช้กับ Vercel Deploy Hook (Settings → Git → Deploy Hooks) หรือเรียก
+    ตรงจาก Railway post-deploy ก็ได้ ไม่ต้องใช้ admin key (เป็น internal hook)
     """
     import os
 
@@ -125,7 +122,7 @@ async def deploy_notify_endpoint(
     settings = get_settings()
     telegram = TelegramClient(settings.telegram_bot_token, settings.telegram_chat_id)
 
-    # ใช้ Vercel env ดึง commit info (มีให้ที่ runtime สำหรับ Deploy Hook)
+    # Vercel system env vars (มีที่ runtime เฉพาะบน Vercel production)
     commit_sha = os.environ.get("VERCEL_GIT_COMMIT_SHA", "")
     commit_ref = os.environ.get("VERCEL_GIT_COMMIT_REF", "")
     commit_msg = os.environ.get("VERCEL_GIT_COMMIT_MESSAGE", "")
@@ -138,7 +135,17 @@ async def deploy_notify_endpoint(
             parts.append(commit_msg)
         git_info = " ".join(parts)
     else:
-        git_info = "(no commit info)"
+        # Fallback สำหรับ Railway — ลองอ่านจากไฟล์ที่ Dockerfile สร้างไว้
+        try:
+            from pathlib import Path
+
+            commit_file = Path("/app/COMMIT_INFO.txt")
+            if commit_file.exists():
+                git_info = commit_file.read_text().strip()[:120]
+            else:
+                git_info = "(ไม่พบข้อมูล commit)"
+        except Exception:
+            git_info = "(ไม่พบข้อมูล commit)"
 
     from datetime import datetime, timedelta, timezone
 
@@ -153,7 +160,7 @@ async def deploy_notify_endpoint(
         "🚀 <b>Deploy สำเร็จ!</b>\n\n"
         f"⏰ {now.strftime('%d/%m/%Y %H:%M')} (Asia/Bangkok)\n"
         f"📦 Commit: {git_info}\n\n"
-        "✅ บอทพร้อมส่งหุ้นซิ่ง + หุ้นระยะยาวเข้า chat นี้"
+        "✅ บอทพร้อมตอบ /surge /longterm /digest /help"
     )
 
     if not telegram.is_configured:

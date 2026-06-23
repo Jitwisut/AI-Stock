@@ -395,6 +395,41 @@ def latest_signals(database_url: str, limit: int = 5) -> list[dict]:
         return _handle_repository_error("latest signals query failed", exc, [])
 
 
+def latest_signals_by_kind(database_url: str, kind: str, limit: int = 10) -> list[dict]:
+    """อ่านสัญญาณล่าสุดจาก DB กรองตามชนิด (surge / longterm / momentum) — เร็ว <1 วิ."""
+    try:
+        from sqlalchemy import text
+    except Exception:
+        return []
+
+    sql = text(
+        """\
+        WITH latest_completed_run AS (
+          SELECT id
+          FROM scan_runs
+          WHERE status = 'completed' AND kind = :kind
+          ORDER BY finished_at DESC NULLS LAST, started_at DESC, id DESC
+          LIMIT 1
+        )
+        SELECT s.*
+        FROM signals s, latest_completed_run
+        WHERE s.scan_run_id = latest_completed_run.id
+        ORDER BY s.surge_score DESC, s.score DESC
+        LIMIT :limit
+        """
+    )
+    try:
+        with _engine(database_url).connect() as connection:
+            rows = (
+                connection.execute(sql, {"kind": kind, "limit": max(1, min(100, limit))})
+                .mappings()
+                .all()
+            )
+        return [_normalize_signal_row(row) for row in rows]
+    except Exception as exc:
+        return _handle_repository_error(f"latest signals by kind ({kind}) query failed", exc, [])
+
+
 def get_signal(database_url: str, signal_id: int) -> dict | None:
     try:
         from sqlalchemy import text
