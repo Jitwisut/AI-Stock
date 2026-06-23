@@ -122,3 +122,4 @@ DATABASE_URL=postgresql+psycopg://stock_radar:stock_radar@localhost:5432/stock_r
 ```bash
 curl -X POST "http://localhost:8000/scan/run" -H "X-Admin-API-Key: $ADMIN_API_KEY"
 ```
+# touch
