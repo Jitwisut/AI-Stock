@@ -264,7 +264,7 @@ async def _handle_bot_command(command: str, chat_id: str) -> None:
     from workers.services import get_longterm_signal_dicts, get_surge_signal_dicts
 
     settings = get_settings()
-    telegram = TelegramClient(settings.telegram_bot_token, settings.telegram_chat_id)
+    telegram = TelegramClient(settings.telegram_bot_token, None)
     if not telegram.is_configured:
         return
 
@@ -278,7 +278,7 @@ async def _handle_bot_command(command: str, chat_id: str) -> None:
                     lines.append(_format_surge_line(s, i))
             else:
                 lines.append("— ยังไม่พบหุ้นที่เข้าเกณฑ์ —")
-            await telegram.send_message("\n".join(lines))
+            await telegram.send_message("\n".join(lines), chat_id=chat_id)
 
         elif cmd in ("/longterm", "/long", "/lt", "/ระยะยาว"):
             picks = get_longterm_signal_dicts(limit=10)
@@ -293,12 +293,12 @@ async def _handle_bot_command(command: str, chat_id: str) -> None:
                         lines.append(f"   • {reasons[0]}")
             else:
                 lines.append("— ยังไม่พบหุ้นที่เข้าเกณฑ์ —")
-            await telegram.send_message("\n".join(lines))
+            await telegram.send_message("\n".join(lines), chat_id=chat_id)
 
         elif cmd in ("/digest", "/summary", "/สรุป"):
             from workers.alerts.digest import build_daily_digest
 
-            await telegram.send_message(build_daily_digest())
+            await telegram.send_message(build_daily_digest(), chat_id=chat_id)
 
         elif cmd in ("/start", "/help"):
             help_text = (
@@ -308,16 +308,17 @@ async def _handle_bot_command(command: str, chat_id: str) -> None:
                 "/digest — สรุปรายวัน (ซิ่ง + ระยะยาว)\n"
                 "/help — ข้อความนี้"
             )
-            await telegram.send_message(help_text)
+            await telegram.send_message(help_text, chat_id=chat_id)
 
         else:
             await telegram.send_message(
-                "❓ ไม่รู้จักคำสั่งนี้ ลอง /help ดูคำสั่งที่ใช้ได้"
+                "❓ ไม่รู้จักคำสั่งนี้ ลอง /help ดูคำสั่งที่ใช้ได้",
+                chat_id=chat_id,
             )
     except Exception as exc:
         logger.exception("bot command failed: %s", exc)
         try:
-            await telegram.send_message(f"⚠️ เกิดข้อผิดพลาด: {exc}")
+            await telegram.send_message(f"⚠️ เกิดข้อผิดพลาด: {exc}", chat_id=chat_id)
         except Exception:
             pass
 
