@@ -4,6 +4,9 @@
 # =============================================================================
 set -euo pipefail
 
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export PYTHONPATH="$ROOT_DIR${PYTHONPATH:+:$PYTHONPATH}"
+
 echo "============================================"
 echo "AI Stock Radar Celery Beat starting"
 echo "============================================"
@@ -13,4 +16,4 @@ echo "⏳ Waiting for services..."
 sleep 5
 
 echo "🚀 Starting Celery Beat scheduler"
-exec celery -A workers.tasks:celery_app beat --loglevel=info
+exec python -m celery -A workers.tasks:celery_app beat --loglevel=info

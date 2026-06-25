@@ -4,6 +4,9 @@
 # =============================================================================
 set -euo pipefail
 
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export PYTHONPATH="$ROOT_DIR${PYTHONPATH:+:$PYTHONPATH}"
+
 echo "============================================"
 echo "AI Stock Radar Celery Worker starting"
 echo "============================================"
@@ -15,4 +18,4 @@ sleep 5
 CONCURRENCY="${CELERY_CONCURRENCY:-4}"
 
 echo "🚀 Starting Celery worker (concurrency=$CONCURRENCY)"
-exec celery -A workers.tasks:celery_app worker --loglevel=info --concurrency="$CONCURRENCY"
+exec python -m celery -A workers.tasks:celery_app worker --loglevel=info --concurrency="$CONCURRENCY"
