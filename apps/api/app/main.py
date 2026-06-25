@@ -1,10 +1,17 @@
 from __future__ import annotations
 
-from datetime import datetime
+import asyncio
+import logging
+import os
+from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+
+logger = logging.getLogger(__name__)
 
 from apps.api.app.schemas import (
     LongTermOut,
@@ -34,7 +41,75 @@ from workers.services import (
 from workers.repository import database_available
 from workers.scanner.fetch_prices import MarketDataUnavailableError
 
-app = FastAPI(title="AI Momentum Stock Radar", version="0.1.0")
+async def _on_startup() -> None:
+    """ส่ง deploy notification + digest เข้า Telegram และลงทะเบียน webhook อัตโนมัติ."""
+    await asyncio.sleep(5)  # รอให้ server boot เสร็จก่อน
+    settings = get_settings()
+    if settings.app_env != "production":
+        return
+
+    # --- ลงทะเบียน Telegram webhook โดยใช้ RENDER_EXTERNAL_URL ที่ Render inject ให้ ---
+    render_url = os.getenv("RENDER_EXTERNAL_URL", "").rstrip("/")
+    if render_url and settings.telegram_bot_token:
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=10) as client:
+                await client.post(
+                    f"https://api.telegram.org/bot{settings.telegram_bot_token}/setWebhook",
+                    json={"url": f"{render_url}/telegram/webhook"},
+                )
+            logger.info("Telegram webhook registered: %s/telegram/webhook", render_url)
+        except Exception as exc:
+            logger.warning("webhook registration failed: %s", exc)
+
+    if not settings.send_telegram:
+        return
+
+    from workers.alerts.digest import build_daily_digest
+    from workers.alerts.telegram import TelegramClient
+
+    telegram = TelegramClient(settings.telegram_bot_token, settings.telegram_chat_id)
+    if not telegram.is_configured:
+        return
+
+    # commit info จากไฟล์ที่ Dockerfile สร้างไว้
+    try:
+        commit_info = Path("/app/COMMIT_INFO.txt").read_text().strip()[:120]
+    except Exception:
+        commit_info = "(ไม่พบข้อมูล commit)"
+
+    try:
+        from zoneinfo import ZoneInfo
+        now = datetime.now(ZoneInfo("Asia/Bangkok"))
+    except Exception:
+        now = datetime.now(timezone(timedelta(hours=7)))
+
+    # 1. Deploy notification
+    try:
+        await telegram.send_message(
+            f"🚀 <b>Deploy สำเร็จ!</b>\n\n"
+            f"⏰ {now.strftime('%d/%m/%Y %H:%M')} (Asia/Bangkok)\n"
+            f"📦 {commit_info}\n\n"
+            "✅ บอทพร้อมตอบ /surge /longterm /digest /help",
+            parse_mode="HTML",
+        )
+    except Exception as exc:
+        logger.warning("deploy notify failed: %s", exc)
+
+    # 2. ส่งข้อมูลหุ้นซิ่ง + ระยะยาว วันนั้นทันที
+    try:
+        await telegram.send_message(build_daily_digest())
+    except Exception as exc:
+        logger.warning("startup digest failed: %s", exc)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    asyncio.create_task(_on_startup())
+    yield
+
+
+app = FastAPI(title="AI Momentum Stock Radar", version="0.1.0", lifespan=lifespan)
 settings = get_settings()
 
 app.add_middleware(
@@ -259,10 +334,6 @@ def settings_status() -> dict:
 # ----------------------------------------------------------------------
 # Telegram Bot Webhook — รับ message จากผู้ใช้แล้วตอบกลับ
 # ----------------------------------------------------------------------
-
-import logging
-
-logger = logging.getLogger(__name__)
 
 
 def _format_surge_line(signal: dict, index: int) -> str:

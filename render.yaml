@@ -1,0 +1,234 @@
+# =============================================================================
+# Render Blueprint — deploy every service in one click
+# =============================================================================
+# Usage:
+#   1. Push this repo to GitHub
+#   2. Go to dashboard.render.com → New → Blueprint
+#   3. Connect GitHub repo → Render reads render.yaml and creates everything
+#   4. After deploy, fill in secrets (TELEGRAM_BOT_TOKEN, etc.) in Dashboard
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # 1. FastAPI — Web Service
+  # ---------------------------------------------------------------------------
+  - type: web
+    name: stock-radar-api
+    env: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    startCommand: /app/scripts/start-api.sh
+    healthCheckPath: /health
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: USE_LIVE_DATA
+        value: "true"
+      - key: ALLOW_MOCK_DATA
+        value: "false"
+      - key: SAVE_SIGNALS
+        value: "true"
+      - key: SEND_TELEGRAM
+        value: "true"
+      - key: MARKET_DATA_PROVIDER
+        value: nasdaq
+      - key: BACKEND_CORS_ORIGINS
+        value: "*"
+      - key: UNIVERSE_MODE
+        value: default
+      - key: SCAN_UNIVERSE_LIMIT
+        value: "0"
+      - key: AI_PROVIDER
+        value: gemini
+      - key: LOG_LEVEL
+        value: INFO
+      - key: SURGE_UNIVERSE_MODE
+        value: all
+      - key: SURGE_UNIVERSE_LIMIT
+        value: "0"
+      - key: SURGE_CANDIDATE_LIMIT
+        value: "120"
+      - key: SURGE_MIN_CHANGE_PERCENT
+        value: "50"
+      - key: SURGE_BACKFILL_MIN_CHANGE_PERCENT
+        value: "10"
+      - key: SURGE_MIN_RESULTS
+        value: "50"
+      - key: LONGTERM_SCAN_LIMIT
+        value: "80"
+      - key: AI_CANDIDATE_LIMIT
+        value: "50"
+      - key: SCAN_WORKERS
+        value: "12"
+      - key: TOP_SIGNAL_LIMIT
+        value: "5"
+      # --- secrets: fill in Render Dashboard after creation ---
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: ADMIN_API_KEY
+        sync: false
+      # --- auto-injected by Render ---
+      - key: DATABASE_URL
+        fromDatabase:
+          name: stock-radar-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: stock-radar-redis
+          type: redis
+          property: connectionString
+
+  # ---------------------------------------------------------------------------
+  # 2. Celery Worker — Background Worker (runs scan jobs)
+  # ---------------------------------------------------------------------------
+  - type: worker
+    name: stock-radar-worker
+    env: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    startCommand: /app/scripts/start-worker.sh
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: USE_LIVE_DATA
+        value: "true"
+      - key: ALLOW_MOCK_DATA
+        value: "false"
+      - key: SAVE_SIGNALS
+        value: "true"
+      - key: SEND_TELEGRAM
+        value: "true"
+      - key: MARKET_DATA_PROVIDER
+        value: nasdaq
+      - key: UNIVERSE_MODE
+        value: default
+      - key: SCAN_UNIVERSE_LIMIT
+        value: "0"
+      - key: AI_PROVIDER
+        value: gemini
+      - key: LOG_LEVEL
+        value: INFO
+      - key: SURGE_UNIVERSE_MODE
+        value: all
+      - key: SURGE_UNIVERSE_LIMIT
+        value: "0"
+      - key: SURGE_CANDIDATE_LIMIT
+        value: "120"
+      - key: SURGE_MIN_CHANGE_PERCENT
+        value: "50"
+      - key: SURGE_BACKFILL_MIN_CHANGE_PERCENT
+        value: "10"
+      - key: SURGE_MIN_RESULTS
+        value: "50"
+      - key: LONGTERM_SCAN_LIMIT
+        value: "80"
+      - key: AI_CANDIDATE_LIMIT
+        value: "50"
+      - key: SCAN_WORKERS
+        value: "12"
+      - key: TOP_SIGNAL_LIMIT
+        value: "5"
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: ADMIN_API_KEY
+        sync: false
+      - key: DATABASE_URL
+        fromDatabase:
+          name: stock-radar-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: stock-radar-redis
+          type: redis
+          property: connectionString
+
+  # ---------------------------------------------------------------------------
+  # 3. Celery Beat — Scheduler (cron jobs for automatic scans)
+  # ---------------------------------------------------------------------------
+  - type: worker
+    name: stock-radar-beat
+    env: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    startCommand: /app/scripts/start-beat.sh
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: USE_LIVE_DATA
+        value: "true"
+      - key: ALLOW_MOCK_DATA
+        value: "false"
+      - key: SAVE_SIGNALS
+        value: "true"
+      - key: SEND_TELEGRAM
+        value: "true"
+      - key: MARKET_DATA_PROVIDER
+        value: nasdaq
+      - key: UNIVERSE_MODE
+        value: default
+      - key: SCAN_UNIVERSE_LIMIT
+        value: "0"
+      - key: AI_PROVIDER
+        value: gemini
+      - key: LOG_LEVEL
+        value: INFO
+      - key: SURGE_UNIVERSE_MODE
+        value: all
+      - key: SURGE_UNIVERSE_LIMIT
+        value: "0"
+      - key: SURGE_CANDIDATE_LIMIT
+        value: "120"
+      - key: SURGE_MIN_CHANGE_PERCENT
+        value: "50"
+      - key: SURGE_BACKFILL_MIN_CHANGE_PERCENT
+        value: "10"
+      - key: SURGE_MIN_RESULTS
+        value: "50"
+      - key: LONGTERM_SCAN_LIMIT
+        value: "80"
+      - key: AI_CANDIDATE_LIMIT
+        value: "50"
+      - key: SCAN_WORKERS
+        value: "12"
+      - key: TOP_SIGNAL_LIMIT
+        value: "5"
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: ADMIN_API_KEY
+        sync: false
+      - key: DATABASE_URL
+        fromDatabase:
+          name: stock-radar-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: stock-radar-redis
+          type: redis
+          property: connectionString
+
+  # ---------------------------------------------------------------------------
+  # 4. Redis — Message Broker for Celery
+  # ---------------------------------------------------------------------------
+  - type: redis
+    name: stock-radar-redis
+    plan: free
+    ipAllowList: []
+
+# ---------------------------------------------------------------------------
+# 5. PostgreSQL — Database
+# ---------------------------------------------------------------------------
+databases:
+  - name: stock-radar-db
+    plan: free

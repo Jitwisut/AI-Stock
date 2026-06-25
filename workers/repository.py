@@ -41,6 +41,60 @@ def database_available(database_url: str) -> bool:
         return False
 
 
+def run_migrations(database_url: str) -> None:
+    """รัน schema.sql ตอน container start — idempotent (ใช้ IF NOT EXISTS).
+
+    Render ไม่มี docker-entrypoint-initdb.d เหมือน docker-compose
+    จึงต้องรัน migration จาก app code เองตอน startup.
+    """
+    from pathlib import Path
+
+    try:
+        from sqlalchemy import text
+    except Exception:
+        return
+
+    schema_path = Path(__file__).resolve().parent.parent / "database" / "schema.sql"
+    if not schema_path.exists():
+        logger.warning("schema.sql not found at %s", schema_path)
+        return
+
+    raw_sql = schema_path.read_text(encoding="utf-8")
+    statements = _split_sql_statements(raw_sql)
+
+    try:
+        with _engine(database_url).begin() as connection:
+            for stmt in statements:
+                connection.execute(text(stmt))
+        logger.info("Database migrations applied successfully (%d statements)", len(statements))
+    except Exception as exc:
+        logger.exception("Database migration failed")
+        if get_settings().app_env == "production":
+            raise exc
+
+
+def _split_sql_statements(raw: str) -> list[str]:
+    """แยก raw SQL เป็น statement ๆ โดยใช้ `;` เป็นตัวคั่น
+    โดยข้ามบรรทัดว่างและ comment."""
+    statements = []
+    buf: list[str] = []
+    for line in raw.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("--"):
+            continue
+        buf.append(line)
+        if stripped.endswith(";"):
+            merged = "\n".join(buf).strip()
+            if merged:
+                statements.append(merged)
+            buf.clear()
+    # เผื่อ statement สุดท้ายไม่มี semicolon
+    remaining = "\n".join(buf).strip()
+    if remaining:
+        statements.append(remaining)
+    return statements
+
+
 def create_scan_run(database_url: str, kind: str, provider: str, status: str = "queued") -> int:
     try:
         from sqlalchemy import text

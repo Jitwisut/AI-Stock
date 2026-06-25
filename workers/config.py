@@ -6,6 +6,33 @@ from functools import lru_cache
 from pathlib import Path
 
 
+def _normalize_database_url(raw: str) -> str:
+    """แก้ไข DATABASE_URL ให้ SQLAlchemy + psycopg อ่านได้.
+
+    Render inject ``postgres://user:pass@host/db`` แต่ psycopg ต้องการ
+    ``postgresql+psycopg://...``.
+    """
+    if raw.startswith("postgres://"):
+        raw = "postgresql+psycopg" + raw[len("postgres"):]
+    elif raw.startswith("postgresql://"):
+        raw = "postgresql+psycopg" + raw[len("postgresql"):]
+    return raw
+
+
+def _normalize_redis_url(raw: str) -> str:
+    """Render inject ``rediss://...`` (TLS) แต่ Celery + redis-py
+    ต้องการ ``redis://...`` โดย TLS เปิดผ่าน query param ``?ssl_cert_reqs=none``
+    แทน (Render internal network ไม่ต้อง verify cert).
+    """
+    if raw.startswith("rediss://"):
+        raw = "redis://" + raw[len("rediss://"):]
+        if "?" in raw:
+            raw += "&ssl_cert_reqs=none"
+        else:
+            raw += "?ssl_cert_reqs=none"
+    return raw
+
+
 def _load_dotenv(path: str = ".env") -> None:
     env_path = Path(path)
     if not env_path.exists():
@@ -98,11 +125,11 @@ def get_settings() -> Settings:
         finnhub_api_key=os.getenv("FINNHUB_API_KEY") or None,
         polygon_api_key=os.getenv("POLYGON_API_KEY") or None,
         admin_api_key=os.getenv("ADMIN_API_KEY") or None,
-        database_url=os.getenv(
+        database_url=_normalize_database_url(os.getenv(
             "DATABASE_URL",
             "postgresql+psycopg://stock_radar:stock_radar@localhost:5432/stock_radar",
-        ),
-        redis_url=os.getenv("REDIS_URL", "redis://localhost:6379/0"),
+        )),
+        redis_url=_normalize_redis_url(os.getenv("REDIS_URL", "redis://localhost:6379/0")),
         app_env=os.getenv("APP_ENV", "development"),
         log_level=os.getenv("LOG_LEVEL", "INFO"),
         market_data_provider=os.getenv("MARKET_DATA_PROVIDER", "yahoo").lower(),
