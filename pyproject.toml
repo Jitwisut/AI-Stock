@@ -31,6 +31,9 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 include = ["apps*", "workers*"]
 
+[tool.poetry]
+package-mode = false
+
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
