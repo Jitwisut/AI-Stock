@@ -447,19 +447,7 @@ async def telegram_set_webhook(url: Optional[str] = None) -> dict:
     if not settings.telegram_bot_token:
         return {"status": "no_token"}
 
-    public_base_url = (
-        os.getenv("RENDER_EXTERNAL_URL")
-        or os.getenv("PUBLIC_API_BASE_URL")
-        or os.getenv("NEXT_PUBLIC_API_BASE_URL")
-        or ""
-    ).rstrip("/")
-    target_url = url or (f"{public_base_url}/telegram/webhook" if public_base_url else None)
-    if not target_url:
-        raise HTTPException(
-            status_code=400,
-            detail="Missing webhook URL. Set RENDER_EXTERNAL_URL/PUBLIC_API_BASE_URL or pass ?url=...",
-        )
-
+    target_url = url or "https://ai-stock-e6ks.vercel.app/telegram/webhook"
     api_url = f"https://api.telegram.org/bot{settings.telegram_bot_token}/setWebhook"
     async with httpx.AsyncClient(timeout=20) as client:
         resp = await client.post(api_url, json={"url": target_url})
