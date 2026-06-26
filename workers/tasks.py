@@ -5,11 +5,12 @@ import asyncio
 from workers.alerts.digest import send_daily_digest
 from workers.config import get_settings
 from workers.main import run
-from workers.repository import get_scan_run
+from workers.repository import get_scan_run, run_migrations
 from workers.services import create_queued_scan, execute_scan_job
 
 
 settings = get_settings()
+run_migrations(settings.database_url)
 
 try:
     from celery import Celery
