@@ -549,12 +549,17 @@ def get_longterm_signal_dicts(limit: int = 10) -> list[dict]:
     # DB-first: Celery beat scan ตอน 07:30 TH เก็บใน signals table
     rows = latest_signals_by_kind(settings.database_url, kind="longterm", limit=limit)
     if rows:
-        # recommendation JSONB holds the full longterm dict from _save_longterm_to_signals
-        result = []
-        for row in rows:
-            rec = row.get("recommendation") or {}
-            result.append(rec if "grade" in rec and "return_6m_percent" in rec else row)
-        return result[:limit]
+        # recommendation JSONB holds the full longterm dict from _save_longterm_to_signals.
+        # เก็บเฉพาะ row ที่เป็น longterm-shaped จริง — กัน momentum signal ที่หลุดมาจาก
+        # fallback query ทำให้ LongTermOut serialize พัง (500)
+        result = [
+            rec for row in rows
+            if isinstance((rec := row.get("recommendation")), dict)
+            and "grade" in rec and "return_6m_percent" in rec
+        ]
+        if result:
+            return result[:limit]
+        # ถ้า DB ไม่มี longterm-shaped row → ตกไปใช้ redis/scan สดด้านล่าง
 
     # Fallback: Redis cache (Railway worker writes here)
     cached = _redis_get_json("stock-radar:longterm:latest")
@@ -763,10 +768,12 @@ def _save_longterm_to_signals(results: list[dict], database_url: str, scan_run_i
         from sqlalchemy import text
         from workers.repository import _engine
 
+        # ใช้ CAST(...AS JSONB) ไม่ใช่ ::jsonb เพราะ SQLAlchemy text() ไม่ bind
+        # :name ที่ตามด้วย :: (จะมองเป็น literal ทำให้ syntax error)
         sql = text("""
             INSERT INTO signals (scan_run_id, symbol, score, momentum_score, volume_score,
                 catalyst_score, premarket_gap_score, breakout_score, risk_score, latest_price, recommendation)
-            VALUES (:scan_run_id, :symbol, :score, 0, 0, 0, 0, 0, 0, :price, :rec::jsonb)
+            VALUES (:scan_run_id, :symbol, :score, 0, 0, 0, 0, 0, 0, :price, CAST(:rec AS JSONB))
         """)
         with _engine(database_url).begin() as conn:
             for r in results:

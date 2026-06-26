@@ -462,7 +462,18 @@ async def _handle_bot_command(command: str, chat_id: str) -> None:
                 )
                 return
             await telegram.send_message(f"🔍 กำลังวิเคราะห์ {arg.upper()}... รอสักครู่", chat_id=chat_id)
-            result = await _run_analysis(arg)
+            try:
+                result = await _run_analysis(arg)
+            except Exception as analysis_exc:
+                msg = str(analysis_exc)
+                if "Too Many Requests" in msg or "429" in msg:
+                    reply = f"⏳ ระบบข้อมูลถูกจำกัดชั่วคราว (rate limit) ลองใหม่อีกครั้งใน 1-2 นาที"
+                elif "unavailable" in msg or "No " in msg or "ไม่พบ" in msg:
+                    reply = f"❓ ไม่พบข้อมูลหุ้น {arg.upper()} — อาจเป็นหุ้นเล็ก/ไม่มีในฐานข้อมูล ลองเช็คสัญลักษณ์อีกครั้ง"
+                else:
+                    reply = f"⚠️ วิเคราะห์ {arg.upper()} ไม่สำเร็จ: {msg[:150]}"
+                await telegram.send_message(reply, chat_id=chat_id)
+                return
             await telegram.send_message(_format_analysis(result), chat_id=chat_id)
 
         elif cmd in ("/surge", "/surges", "/ziing", "/ซิ่ง"):
