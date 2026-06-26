@@ -385,6 +385,23 @@ async def _handle_bot_command(command: str, chat_id: str) -> None:
                 lines.append("— ยังไม่พบหุ้นที่เข้าเกณฑ์ —")
             await telegram.send_message("\n".join(lines), chat_id=chat_id)
 
+        elif cmd in ("/scan", "/สแกน", "/update"):
+            await telegram.send_message("🔄 เริ่ม scan หุ้น... รอประมาณ 1-2 นาที", chat_id=chat_id)
+            from workers.services import create_queued_scan, execute_scan_job
+            import asyncio, concurrent.futures
+
+            def _run_scans():
+                for kind in ("surge", "longterm"):
+                    try:
+                        run = create_queued_scan(kind=kind)
+                        execute_scan_job(run["id"], kind=kind, send_telegram=False)
+                    except Exception as e:
+                        logger.warning("scan %s failed: %s", kind, e)
+
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(concurrent.futures.ThreadPoolExecutor(), _run_scans)
+            await telegram.send_message("✅ Scan เสร็จแล้ว! ลอง /surge หรือ /longterm ได้เลย", chat_id=chat_id)
+
         elif cmd in ("/digest", "/summary", "/สรุป"):
             from workers.alerts.digest import build_daily_digest
 
@@ -393,6 +410,7 @@ async def _handle_bot_command(command: str, chat_id: str) -> None:
         elif cmd in ("/start", "/help"):
             help_text = (
                 "🤖 คำสั่งที่ใช้ได้:\n\n"
+                "/scan — สแกนหุ้นใหม่ (ใช้ครั้งแรกหรือเมื่อข้อมูลหมดอายุ)\n"
                 "/surge — หุ้นซิ่ง Top 10\n"
                 "/longterm — หุ้นน่าสนใจระยะยาว Top 10\n"
                 "/digest — สรุปรายวัน (ซิ่ง + ระยะยาว)\n"
