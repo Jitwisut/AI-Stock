@@ -14,10 +14,8 @@ RUN pip install --no-cache-dir -e .
 RUN git log -1 --format="%h (%D) %s" > /app/COMMIT_INFO.txt 2>/dev/null || \
     echo "(no git history)" > /app/COMMIT_INFO.txt
 
-# Startup script — Render inject $PORT, $DATABASE_URL, $REDIS_URL
-# และ override CMD ผ่าน startCommand ใน render.yaml
-COPY scripts/start-api.sh /app/scripts/start-api.sh
-RUN chmod +x /app/scripts/start-api.sh
+COPY scripts/ /app/scripts/
+RUN chmod +x /app/scripts/*.sh
 
 EXPOSE 8000
 

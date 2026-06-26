@@ -17,7 +17,6 @@ services:
     env: docker
     dockerfilePath: ./Dockerfile
     plan: free
-    startCommand: /app/scripts/start-api.sh
     healthCheckPath: /health
     envVars:
       - key: APP_ENV
@@ -88,9 +87,8 @@ services:
   - type: worker
     name: stock-radar-worker
     env: docker
-    dockerfilePath: ./Dockerfile
+    dockerfilePath: ./Dockerfile.worker
     plan: free
-    startCommand: /app/scripts/start-worker.sh
     envVars:
       - key: APP_ENV
         value: production
@@ -156,9 +154,8 @@ services:
   - type: worker
     name: stock-radar-beat
     env: docker
-    dockerfilePath: ./Dockerfile
+    dockerfilePath: ./Dockerfile.beat
     plan: free
-    startCommand: /app/scripts/start-beat.sh
     envVars:
       - key: APP_ENV
         value: production

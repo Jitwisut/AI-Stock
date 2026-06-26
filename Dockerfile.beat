@@ -1,0 +1,18 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq-dev curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY . .
+RUN pip install --no-cache-dir -e .
+
+RUN git log -1 --format="%h (%D) %s" > /app/COMMIT_INFO.txt 2>/dev/null || \
+    echo "(no git history)" > /app/COMMIT_INFO.txt
+
+COPY scripts/ /app/scripts/
+RUN chmod +x /app/scripts/*.sh
+
+CMD ["/app/scripts/start-beat.sh"]
