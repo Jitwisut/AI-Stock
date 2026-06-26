@@ -347,6 +347,23 @@ def _format_surge_line(signal: dict, index: int) -> str:
     return f"{index}. {signal.get('symbol', '?')} [{grade}] {change:+.1f}% · vol {rel_vol:.1f}x · ${price:.2f}"
 
 
+async def _run_scan_and_get(kind: str, limit: int = 10) -> list[dict]:
+    """รัน scan แล้วคืนผลลัพธ์ทันที (ใช้ตอนไม่มีข้อมูลใน DB)."""
+    import asyncio, concurrent.futures
+    from workers.services import (
+        create_queued_scan, execute_scan_job,
+        get_surge_signal_dicts, get_longterm_signal_dicts,
+    )
+
+    def _scan():
+        run = create_queued_scan(kind=kind)
+        execute_scan_job(run["id"], kind=kind, send_telegram=False)
+
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(concurrent.futures.ThreadPoolExecutor(max_workers=1), _scan)
+    return get_surge_signal_dicts(limit) if kind == "surge" else get_longterm_signal_dicts(limit)
+
+
 async def _handle_bot_command(command: str, chat_id: str) -> None:
     """ตอบกลับคำสั่งจากผู้ใช้ใน Telegram."""
     from workers.alerts.telegram import TelegramClient
@@ -362,6 +379,9 @@ async def _handle_bot_command(command: str, chat_id: str) -> None:
     try:
         if cmd in ("/surge", "/surges", "/ziing", "/ซิ่ง"):
             signals = get_surge_signal_dicts(limit=10)
+            if not signals:
+                await telegram.send_message("🔄 ยังไม่มีข้อมูล กำลังสแกนหุ้น... รอสักครู่", chat_id=chat_id)
+                signals = await _run_scan_and_get("surge", limit=10)
             lines = ["🚀 หุ้นซิ่ง Top 10\n"]
             if signals:
                 for i, s in enumerate(signals, 1):
@@ -372,6 +392,9 @@ async def _handle_bot_command(command: str, chat_id: str) -> None:
 
         elif cmd in ("/longterm", "/long", "/lt", "/ระยะยาว"):
             picks = get_longterm_signal_dicts(limit=10)
+            if not picks:
+                await telegram.send_message("🔄 ยังไม่มีข้อมูล กำลังสแกนหุ้น... รอสักครู่", chat_id=chat_id)
+                picks = await _run_scan_and_get("longterm", limit=10)
             lines = ["📈 หุ้นน่าสนใจระยะยาว Top 10\n"]
             if picks:
                 for i, p in enumerate(picks, 1):
