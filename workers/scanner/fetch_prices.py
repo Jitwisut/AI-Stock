@@ -2,14 +2,47 @@ from __future__ import annotations
 
 import json
 import csv
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from io import StringIO
 from datetime import datetime, timedelta, timezone
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from workers.config import get_settings
 from workers.data_models import MarketSnapshot
+
+# Cache snapshot ระดับ module เพื่อลดการยิงซ้ำไป provider เดียวกัน (โดยเฉพาะ Yahoo
+# ที่ rate-limit แรง) — TTL สั้นพอให้ข้อมูล daily ยังใหม่ แต่กัน 429 จากการเรียกถี่
+_SNAPSHOT_CACHE: dict[str, tuple[float, MarketSnapshot]] = {}
+_SNAPSHOT_CACHE_TTL = 120.0  # วินาที
+
+
+def _http_get_with_retry(request: Request, *, timeout: int = 15, retries: int = 3) -> bytes:
+    """ยิง HTTP request พร้อม retry + exponential backoff เมื่อเจอ 429/5xx."""
+    last_exc: Exception | None = None
+    for attempt in range(retries):
+        try:
+            with urlopen(request, timeout=timeout) as response:
+                return response.read()
+        except HTTPError as exc:
+            last_exc = exc
+            # 429 (rate limit) หรือ 5xx → รอแล้วลองใหม่; error อื่น (404 ฯลฯ) เลิกทันที
+            if exc.code == 429 or 500 <= exc.code < 600:
+                if attempt < retries - 1:
+                    time.sleep(0.8 * (2**attempt))  # 0.8s, 1.6s, 3.2s
+                    continue
+            raise
+        except (URLError, TimeoutError) as exc:
+            last_exc = exc
+            if attempt < retries - 1:
+                time.sleep(0.8 * (2**attempt))
+                continue
+            raise
+    if last_exc:
+        raise last_exc
+    raise MarketDataUnavailableError("HTTP request failed without exception")
 
 # Nasdaq's public quote API rejects non-browser User-Agents with a JS/Cloudflare
 # challenge, so requests must look like a real browser.
@@ -180,10 +213,9 @@ class YahooChartMarketDataProvider(MarketDataProvider):
     def get_snapshot(self, symbol: str) -> MarketSnapshot:
         request = Request(
             f"{self.chart_url}/{symbol}?{urlencode({'range': '1mo', 'interval': '1d'})}",
-            headers={"User-Agent": "stock-radar-ai/0.1"},
+            headers=_BROWSER_HEADERS,
         )
-        with urlopen(request, timeout=15) as response:
-            payload = json.loads(response.read().decode("utf-8"))
+        payload = json.loads(_http_get_with_retry(request, timeout=15).decode("utf-8"))
 
         results = payload.get("chart", {}).get("result", [])
         if not results:
@@ -295,10 +327,18 @@ class LiveFallbackMarketDataProvider(MarketDataProvider):
         self.name = "_".join(provider.name for provider in providers)
 
     def get_snapshot(self, symbol: str) -> MarketSnapshot:
+        # คืนจาก cache ถ้ายังไม่หมดอายุ — ลดการยิงซ้ำที่ทำให้ Yahoo โดน 429
+        key = symbol.upper()
+        cached = _SNAPSHOT_CACHE.get(key)
+        if cached and (time.time() - cached[0]) < _SNAPSHOT_CACHE_TTL:
+            return cached[1]
+
         errors: list[str] = []
         for provider in self.providers:
             try:
-                return provider.get_snapshot(symbol)
+                snapshot = provider.get_snapshot(symbol)
+                _SNAPSHOT_CACHE[key] = (time.time(), snapshot)
+                return snapshot
             except Exception as exc:
                 errors.append(f"{provider.name}: {exc}")
         raise MarketDataUnavailableError(
