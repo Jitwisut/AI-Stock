@@ -286,6 +286,7 @@ def execute_scan_job(
             if kind == "longterm":
                 results = _longterm_pool(force=True)
                 _redis_set_json("stock-radar:longterm:latest", results, _LONGTERM_TTL_SECONDS)
+                _save_longterm_to_signals(results, settings.database_url, scan_run_id)
                 update_scan_run(
                     settings.database_url,
                     scan_run_id,
@@ -438,7 +439,12 @@ def get_longterm_signal_dicts(limit: int = 10) -> list[dict]:
     # DB-first: Celery beat scan ตอน 07:30 TH เก็บใน signals table
     rows = latest_signals_by_kind(settings.database_url, kind="longterm", limit=limit)
     if rows:
-        return rows[:limit]
+        # recommendation JSONB holds the full longterm dict from _save_longterm_to_signals
+        result = []
+        for row in rows:
+            rec = row.get("recommendation") or {}
+            result.append(rec if "grade" in rec and "return_6m_percent" in rec else row)
+        return result[:limit]
 
     # Fallback: Redis cache (Railway worker writes here)
     cached = _redis_get_json("stock-radar:longterm:latest")
@@ -641,6 +647,30 @@ def provider_ready() -> tuple[bool, str | None]:
     return True, None
 
 
+def _save_longterm_to_signals(results: list[dict], database_url: str, scan_run_id: int) -> None:
+    """Save longterm results into signals table (recommendation JSONB holds the full dict)."""
+    try:
+        from sqlalchemy import text
+        from workers.repository import _engine
+
+        sql = text("""
+            INSERT INTO signals (scan_run_id, symbol, score, momentum_score, volume_score,
+                catalyst_score, premarket_gap_score, breakout_score, risk_score, latest_price, recommendation)
+            VALUES (:scan_run_id, :symbol, :score, 0, 0, 0, 0, 0, 0, :price, :rec::jsonb)
+        """)
+        with _engine(database_url).begin() as conn:
+            for r in results:
+                conn.execute(sql, {
+                    "scan_run_id": scan_run_id,
+                    "symbol": r["symbol"],
+                    "score": r.get("score", 0),
+                    "price": r.get("price", 0),
+                    "rec": json.dumps(r),
+                })
+    except Exception:
+        logger.warning("_save_longterm_to_signals failed", exc_info=True)
+
+
 @contextmanager
 def _redis_lock(name: str, timeout_seconds: int):
     settings = get_settings()
@@ -656,7 +686,7 @@ def _redis_lock(name: str, timeout_seconds: int):
             yield
         finally:
             lock.release()
-    except ImportError:
+    except (ImportError, Exception):
         yield
 
 
