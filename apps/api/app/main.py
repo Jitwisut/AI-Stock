@@ -38,7 +38,7 @@ from workers.services import (
     redis_available,
     run_scan,
 )
-from workers.repository import database_available
+from workers.repository import database_available, run_migrations
 from workers.scanner.fetch_prices import MarketDataUnavailableError
 
 async def _on_startup() -> None:
@@ -105,6 +105,8 @@ async def _on_startup() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    settings = get_settings()
+    run_migrations(settings.database_url)
     asyncio.create_task(_on_startup())
     yield
 
