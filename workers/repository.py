@@ -458,6 +458,7 @@ def latest_signals_by_kind(database_url: str, kind: str, limit: int = 10) -> lis
     except Exception:
         return []
 
+    _limit = max(1, min(100, limit))
     sql = text(
         """\
         WITH latest_completed_run AS (
@@ -474,13 +475,20 @@ def latest_signals_by_kind(database_url: str, kind: str, limit: int = 10) -> lis
         LIMIT :limit
         """
     )
+    # Fallback: signals เก่าที่ยังไม่ผูก scan_run (ก่อน migration)
+    order_col = "surge_score" if kind == "surge" else "score"
+    sql_fallback = text(
+        f"SELECT * FROM signals ORDER BY {order_col} DESC NULLS LAST, created_at DESC LIMIT :limit"
+    )
     try:
         with _engine(database_url).connect() as connection:
             rows = (
-                connection.execute(sql, {"kind": kind, "limit": max(1, min(100, limit))})
+                connection.execute(sql, {"kind": kind, "limit": _limit})
                 .mappings()
                 .all()
             )
+            if not rows:
+                rows = connection.execute(sql_fallback, {"limit": _limit}).mappings().all()
         return [_normalize_signal_row(row) for row in rows]
     except Exception as exc:
         return _handle_repository_error(f"latest signals by kind ({kind}) query failed", exc, [])
