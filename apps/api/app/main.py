@@ -347,6 +347,79 @@ def _format_surge_line(signal: dict, index: int) -> str:
     return f"{index}. {signal.get('symbol', '?')} [{grade}] {change:+.1f}% · vol {rel_vol:.1f}x · ${price:.2f}"
 
 
+async def _run_analysis(query: str) -> dict:
+    """เรียกวิเคราะห์หุ้นรายตัว (ฟังก์ชันเดียวกับที่เว็บใช้ผ่าน /analysis/stock)."""
+    from workers.services import analyze_stock_query
+
+    return await analyze_stock_query(query)
+
+
+def _format_analysis(result: dict) -> str:
+    """จัดรูปผลวิเคราะห์รายตัวเป็นข้อความ Telegram: จุดเข้า/จุดขาย/ข่าว/บทวิเคราะห์ AI."""
+    stock = result.get("stock") or {}
+    signal = result.get("signal") or {}
+    plan = signal.get("surge_plan") or {}
+    grade = (signal.get("surge_grade") or {}).get("grade", "-")
+    rec = signal.get("recommendation") or {}
+
+    symbol = stock.get("symbol") or signal.get("symbol") or "?"
+    name = stock.get("name") or ""
+    price = signal.get("latest_price", 0.0)
+    change = signal.get("premarket_gap_percent", 0.0)
+    rel_vol = signal.get("relative_volume", 0.0)
+
+    lines = [
+        f"📊 วิเคราะห์ {symbol}" + (f" — {name}" if name else ""),
+        f"ราคา ${price:.2f} · {change:+.1f}% · vol {rel_vol:.1f}x · เกรด [{grade}]",
+    ]
+    if rec.get("label"):
+        lines.append(f"คำแนะนำเชิงเฝ้าดู: {rec['label']}")
+
+    # จุดเข้า / จุดขาย / stop จาก surge_plan
+    lines.append("")
+    lines.append("🎯 แผนเทรด (อ้างอิงข้อมูล daily)")
+    if plan.get("entry_zone"):
+        lines.append(f"• จุดเข้า: ${plan['entry_zone']}")
+    if plan.get("entry_note"):
+        lines.append(f"  ({plan['entry_note']})")
+    if plan.get("stop"):
+        stop_pct = plan.get("stop_pct")
+        stop_txt = f"• Stop loss: ${plan['stop']}"
+        if stop_pct:
+            stop_txt += f" (-{stop_pct:.0f}%)"
+        lines.append(stop_txt)
+    targets = plan.get("targets") or []
+    for t in targets:
+        lines.append(f"• {t.get('label', 'TP')}: ${t.get('price')}")
+    if plan.get("risk_reward"):
+        lines.append(f"• Risk/Reward: {plan['risk_reward']}")
+
+    # ข่าวล่าสุด
+    news = signal.get("news") or []
+    if news:
+        lines.append("")
+        lines.append("📰 ข่าวล่าสุด")
+        for item in news[:3]:
+            title = (item.get("title") or "").strip()
+            source = item.get("source") or ""
+            if title:
+                lines.append(f"• {title}" + (f" ({source})" if source else ""))
+    else:
+        lines.append("")
+        lines.append("📰 ยังไม่พบข่าวล่าสุดที่ชัดเจน")
+
+    # บทวิเคราะห์ AI (ตัดความยาวกัน message เกิน limit)
+    analysis = (result.get("analysis") or "").strip()
+    if analysis:
+        lines.append("")
+        lines.append("🤖 บทวิเคราะห์ AI")
+        lines.append(analysis[:1500])
+
+    lines.append("")
+    lines.append("⚠️ เป็นเครื่องมือช่วยคัดกรอง ไม่ใช่คำแนะนำการลงทุน")
+    return "\n".join(lines)
+
+
 async def _run_scan_and_get(kind: str, limit: int = 10) -> list[dict]:
     """รัน scan แล้วคืนผลลัพธ์ทันที (ใช้ตอนไม่มีข้อมูลใน DB)."""
     import asyncio, concurrent.futures
@@ -376,8 +449,23 @@ async def _handle_bot_command(command: str, chat_id: str) -> None:
         return
 
     cmd = command.strip().lower()
+    # แยก command กับ argument (เช่น "/analyze AAPL" -> cmd_word="/analyze", arg="AAPL")
+    parts = command.strip().split(maxsplit=1)
+    cmd_word = parts[0].lower() if parts else ""
+    arg = parts[1].strip() if len(parts) > 1 else ""
     try:
-        if cmd in ("/surge", "/surges", "/ziing", "/ซิ่ง"):
+        if cmd_word in ("/analyze", "/a", "/วิเคราะห์", "/stock"):
+            if not arg:
+                await telegram.send_message(
+                    "พิมพ์ชื่อหุ้นต่อท้ายด้วย เช่น /analyze AAPL หรือ /a TSLA",
+                    chat_id=chat_id,
+                )
+                return
+            await telegram.send_message(f"🔍 กำลังวิเคราะห์ {arg.upper()}... รอสักครู่", chat_id=chat_id)
+            result = await _run_analysis(arg)
+            await telegram.send_message(_format_analysis(result), chat_id=chat_id)
+
+        elif cmd in ("/surge", "/surges", "/ziing", "/ซิ่ง"):
             signals = get_surge_signal_dicts(limit=10)
             if not signals:
                 await telegram.send_message("🔄 ยังไม่มีข้อมูล กำลังสแกน+คัดกรองด้วย AI... รอ 1-2 นาที", chat_id=chat_id)
@@ -436,6 +524,8 @@ async def _handle_bot_command(command: str, chat_id: str) -> None:
         elif cmd in ("/start", "/help"):
             help_text = (
                 "🤖 คำสั่งที่ใช้ได้:\n\n"
+                "/analyze SYMBOL — วิเคราะห์หุ้นรายตัว (จุดเข้า/จุดขาย/ข่าว/AI)\n"
+                "   เช่น /analyze AAPL หรือ /a TSLA\n"
                 "/scan — สแกนหุ้นใหม่ (ใช้ครั้งแรกหรือเมื่อข้อมูลหมดอายุ)\n"
                 "/surge — หุ้นซิ่ง Top 10\n"
                 "/longterm — หุ้นน่าสนใจระยะยาว Top 10\n"
