@@ -75,20 +75,22 @@ def run_migrations(database_url: str) -> None:
 
 def _split_sql_statements(raw: str) -> list[str]:
     """แยก raw SQL เป็น statement ๆ โดยใช้ `;` เป็นตัวคั่น
-    โดยข้ามบรรทัดว่างและ comment."""
+    โดยข้ามบรรทัดว่างและ comment และไม่แยกภายใน $$ dollar-quote block."""
     statements = []
     buf: list[str] = []
+    in_dollar_quote = False
     for line in raw.splitlines():
         stripped = line.strip()
         if not stripped or stripped.startswith("--"):
             continue
+        if stripped.count("$$") % 2 == 1:  # odd number of $$ → toggle
+            in_dollar_quote = not in_dollar_quote
         buf.append(line)
-        if stripped.endswith(";"):
+        if stripped.endswith(";") and not in_dollar_quote:
             merged = "\n".join(buf).strip()
             if merged:
                 statements.append(merged)
             buf.clear()
-    # เผื่อ statement สุดท้ายไม่มี semicolon
     remaining = "\n".join(buf).strip()
     if remaining:
         statements.append(remaining)
