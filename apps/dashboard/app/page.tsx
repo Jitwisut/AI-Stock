@@ -21,6 +21,7 @@ import {
   Sparkles,
   Target,
   TrendingUp,
+  X,
   Zap
 } from "lucide-react";
 import Link from "next/link";
@@ -139,6 +140,7 @@ export default function DashboardPage() {
   const [loadingStocks, setLoadingStocks] = useState(false);
   const [runningScan, setRunningScan] = useState(false);
   const [error, setError] = useState("");
+  const [mobileDetailOpen, setMobileDetailOpen] = useState(false);
 
   const selected = useMemo(() => {
     return signals.find((signal) => signal.symbol === selectedSymbol) ?? signals[0];
@@ -401,7 +403,7 @@ export default function DashboardPage() {
                 key={`surge-${signal.symbol}-${signal.created_at ?? "latest"}`}
                 signal={signal}
                 selected={selected?.symbol === signal.symbol}
-                onClick={() => setSelectedSymbol(signal.symbol)}
+                onClick={() => { setSelectedSymbol(signal.symbol); setMobileDetailOpen(true); }}
               />
             ))
           )}
@@ -464,7 +466,7 @@ export default function DashboardPage() {
                     return (
                       <tr
                         key={`${signal.symbol}-${signal.created_at ?? "latest"}`}
-                        onClick={() => setSelectedSymbol(signal.symbol)}
+                        onClick={() => { setSelectedSymbol(signal.symbol); setMobileDetailOpen(true); }}
                         className={`group cursor-pointer border-t border-bg-line transition ${
                           isSelected
                             ? "bg-gain/[0.06]"
@@ -524,7 +526,7 @@ export default function DashboardPage() {
         </div>
 
         {/* Detail */}
-        <aside className="panel p-4 lg:sticky lg:top-5 lg:max-h-[calc(100vh-2rem)] lg:overflow-y-auto">
+        <aside className="panel hidden p-4 lg:block lg:sticky lg:top-5 lg:max-h-[calc(100vh-2rem)] lg:overflow-y-auto">
           {selected ? (
             <SignalDetail signal={selected} summary={summary} />
           ) : (
@@ -576,6 +578,13 @@ export default function DashboardPage() {
       <footer className="mt-6 text-center text-[11px] text-ink-subtle">
         AI Momentum Radar · ข้อมูลนี้เป็นเครื่องมือช่วยคัดกรอง ไม่ใช่คำแนะนำทางการเงิน
       </footer>
+
+      <MobileDetailDrawer
+        open={mobileDetailOpen}
+        onClose={() => setMobileDetailOpen(false)}
+        signal={selected}
+        summary={summary}
+      />
     </main>
   );
 }
@@ -982,6 +991,48 @@ function EmptyState({
       <div className="text-sm font-medium text-ink">{title}</div>
       <div className="text-xs text-ink-muted">{description}</div>
     </div>
+  );
+}
+
+function MobileDetailDrawer({
+  open,
+  onClose,
+  signal,
+  summary
+}: {
+  open: boolean;
+  onClose: () => void;
+  signal: Signal | undefined;
+  summary: string;
+}) {
+  if (!signal) return null;
+  return (
+    <>
+      <div
+        className={`fixed inset-0 z-40 bg-black/60 backdrop-blur-sm transition-opacity lg:hidden ${
+          open ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"
+        }`}
+        onClick={onClose}
+      />
+      <div
+        className={`fixed bottom-0 left-0 right-0 z-50 max-h-[88dvh] overflow-y-auto rounded-t-2xl border-t border-bg-line bg-bg-surface p-4 transition-transform duration-300 ease-out lg:hidden ${
+          open ? "translate-y-0" : "translate-y-full"
+        }`}
+      >
+        <div className="relative mb-4 flex items-center justify-center">
+          <div className="h-1 w-10 rounded-full bg-bg-line" />
+          <button
+            type="button"
+            onClick={onClose}
+            className="absolute right-0 rounded-lg border border-bg-line p-1.5 text-ink-subtle hover:text-ink"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <SignalDetail signal={signal} summary={summary} />
+        <div className="h-4" />
+      </div>
+    </>
   );
 }
 

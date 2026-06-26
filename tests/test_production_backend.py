@@ -193,6 +193,60 @@ def test_scan_run_enqueues_with_admin_key(monkeypatch) -> None:
     assert response.json()["status"] == "queued"
 
 
+def test_enqueue_scan_job_runs_inline_when_background_workers_are_disabled(monkeypatch) -> None:
+    _reset_settings(monkeypatch, APP_ENV="development", BACKGROUND_WORKERS_ENABLED="false")
+
+    import workers.tasks
+
+    calls = []
+
+    monkeypatch.setattr(
+        workers.tasks,
+        "create_queued_scan",
+        lambda kind="momentum": {
+            "id": 456,
+            "kind": kind,
+            "status": "queued",
+            "provider": "nasdaq",
+            "started_at": None,
+            "finished_at": None,
+            "universe_count": 0,
+            "scanned_count": 0,
+            "failed_count": 0,
+            "error": None,
+        },
+    )
+    monkeypatch.setattr(
+        workers.tasks,
+        "execute_scan_job",
+        lambda scan_run_id, *, kind="momentum", send_telegram=False: calls.append(
+            (scan_run_id, kind, send_telegram)
+        ),
+    )
+    monkeypatch.setattr(
+        workers.tasks,
+        "get_scan_run",
+        lambda database_url, scan_run_id: {
+            "id": scan_run_id,
+            "kind": "momentum",
+            "status": "completed",
+            "provider": "nasdaq",
+            "started_at": None,
+            "finished_at": None,
+            "universe_count": 0,
+            "scanned_count": 0,
+            "failed_count": 0,
+            "error": None,
+        },
+    )
+
+    response = workers.tasks.enqueue_scan_job(kind="momentum", send_telegram=True)
+
+    assert calls == [(456, "momentum", True)]
+    assert response["id"] == 456
+    assert response["status"] == "completed"
+
+
 def test_health_ready_fails_when_provider_is_not_configured(monkeypatch) -> None:
     _reset_settings(
         monkeypatch,

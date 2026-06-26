@@ -5,6 +5,7 @@ import asyncio
 from workers.alerts.digest import send_daily_digest
 from workers.config import get_settings
 from workers.main import run
+from workers.repository import get_scan_run
 from workers.services import create_queued_scan, execute_scan_job
 
 
@@ -69,9 +70,15 @@ def run_scan_job(scan_run_id: int, kind: str = "momentum", send_telegram: bool =
 
 
 def enqueue_scan_job(kind: str = "momentum", send_telegram: bool = False) -> dict:
+    current_settings = get_settings()
     scan_run = create_queued_scan(kind=kind)
-    if not celery_app:
-        raise RuntimeError("Celery is not available")
+    if not current_settings.background_workers_enabled or not celery_app:
+        execute_scan_job(scan_run["id"], kind=kind, send_telegram=send_telegram)
+        return get_scan_run(current_settings.database_url, scan_run["id"]) or {
+            **scan_run,
+            "status": "completed",
+        }
+
     celery_app.send_task(
         "workers.tasks.run_scan_job",
         args=[scan_run["id"], kind, send_telegram],

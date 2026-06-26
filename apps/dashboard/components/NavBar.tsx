@@ -5,41 +5,72 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const LINKS = [
-  { href: "/", label: "แดชบอร์ด", icon: Radar },
-  { href: "/analyze", label: "วิเคราะห์หุ้น", icon: BrainCircuit },
-  { href: "/surge", label: "หุ้นซิ่ง", icon: Flame },
-  { href: "/longterm", label: "ระยะยาว", icon: LineChart },
-  { href: "/stocks", label: "หุ้นทั้งหมด", icon: ListOrdered }
+  { href: "/", label: "แดชบอร์ด", short: "หลัก", icon: Radar },
+  { href: "/analyze", label: "วิเคราะห์หุ้น", short: "วิเคราะห์", icon: BrainCircuit },
+  { href: "/surge", label: "หุ้นซิ่ง", short: "ซิ่ง", icon: Flame },
+  { href: "/longterm", label: "ระยะยาว", short: "ยาว", icon: LineChart },
+  { href: "/stocks", label: "หุ้นทั้งหมด", short: "ทั้งหมด", icon: ListOrdered }
 ] as const;
 
 export function NavBar() {
   const pathname = usePathname();
+  const isActive = (href: string) =>
+    href === "/" ? pathname === "/" : pathname.startsWith(href);
 
   return (
-    <nav className="sticky top-0 z-50 border-b border-bg-line bg-bg-base/80 backdrop-blur">
-      <div className="mx-auto flex max-w-[1440px] items-center gap-1 px-4 py-2 sm:px-6 lg:px-8">
-        <span className="mr-3 hidden text-xs font-semibold uppercase tracking-wider text-ink-subtle sm:inline">
-          AI Radar
-        </span>
-        {LINKS.map((link) => {
-          const active = link.href === "/" ? pathname === "/" : pathname.startsWith(link.href);
-          const Icon = link.icon;
-          return (
-            <Link
-              key={link.href}
-              href={link.href}
-              className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition ${
-                active
-                  ? "bg-gain/10 text-gain ring-1 ring-gain/30"
-                  : "text-ink-muted hover:bg-bg-raised hover:text-ink"
-              }`}
-            >
-              <Icon className="h-4 w-4" />
-              {link.label}
-            </Link>
-          );
-        })}
-      </div>
-    </nav>
+    <>
+      {/* ── Desktop top nav ── */}
+      <nav className="sticky top-0 z-50 border-b border-bg-line bg-bg-base/80 backdrop-blur">
+        <div className="mx-auto flex max-w-[1440px] items-center gap-1 px-4 py-2 sm:px-6 lg:px-8">
+          <span className="mr-auto text-xs font-semibold uppercase tracking-wider text-ink-subtle sm:mr-3">
+            AI Radar
+          </span>
+          <div className="hidden items-center gap-1 sm:flex">
+            {LINKS.map((link) => {
+              const active = isActive(link.href);
+              const Icon = link.icon;
+              return (
+                <Link
+                  key={link.href}
+                  href={link.href}
+                  className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition ${
+                    active
+                      ? "bg-gain/10 text-gain ring-1 ring-gain/30"
+                      : "text-ink-muted hover:bg-bg-raised hover:text-ink"
+                  }`}
+                >
+                  <Icon className="h-4 w-4" />
+                  {link.label}
+                </Link>
+              );
+            })}
+          </div>
+        </div>
+      </nav>
+
+      {/* ── Mobile bottom tab bar ── */}
+      <nav className="fixed bottom-0 left-0 right-0 z-40 border-t border-bg-line bg-bg-base/95 backdrop-blur sm:hidden">
+        <div className="flex">
+          {LINKS.map((link) => {
+            const active = isActive(link.href);
+            const Icon = link.icon;
+            return (
+              <Link
+                key={link.href}
+                href={link.href}
+                className={`flex flex-1 flex-col items-center gap-0.5 py-2.5 text-[10px] font-medium transition ${
+                  active ? "text-gain" : "text-ink-subtle"
+                }`}
+              >
+                <Icon
+                  className={`h-5 w-5 ${active ? "drop-shadow-[0_0_8px_rgba(34,197,94,0.7)]" : ""}`}
+                />
+                {link.short}
+              </Link>
+            );
+          })}
+        </div>
+      </nav>
+    </>
   );
 }

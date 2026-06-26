@@ -572,6 +572,7 @@ def get_settings_status() -> dict:
         "allow_mock_data": settings.allow_mock_data,
         "save_signals": settings.save_signals,
         "send_telegram": settings.send_telegram,
+        "background_workers_enabled": settings.background_workers_enabled,
         "telegram_configured": bool(settings.telegram_bot_token and settings.telegram_chat_id),
         "openai_configured": bool(settings.openai_api_key),
         "gemini_configured": bool(settings.gemini_api_key),

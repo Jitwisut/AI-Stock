@@ -168,6 +168,7 @@ class SettingsStatusOut(BaseModel):
     allow_mock_data: bool = True
     save_signals: bool
     send_telegram: bool
+    background_workers_enabled: bool = True
     telegram_configured: bool
     openai_configured: bool
     gemini_configured: bool = False

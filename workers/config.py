@@ -95,6 +95,7 @@ class Settings:
     allow_mock_data: bool
     send_telegram: bool
     save_signals: bool
+    background_workers_enabled: bool
     backend_cors_origins: list[str]
     top_signal_limit: int
     universe_mode: str
@@ -137,6 +138,7 @@ def get_settings() -> Settings:
         allow_mock_data=_env_bool("ALLOW_MOCK_DATA", default=False),
         send_telegram=_env_bool("SEND_TELEGRAM"),
         save_signals=_env_bool("SAVE_SIGNALS"),
+        background_workers_enabled=_env_bool("BACKGROUND_WORKERS_ENABLED", default=True),
         backend_cors_origins=_env_csv("BACKEND_CORS_ORIGINS", "*"),
         top_signal_limit=_env_int("TOP_SIGNAL_LIMIT", default=10, minimum=1, maximum=100),
         universe_mode=os.getenv("UNIVERSE_MODE", "all").lower(),

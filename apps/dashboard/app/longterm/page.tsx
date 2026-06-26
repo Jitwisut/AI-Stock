@@ -7,7 +7,8 @@ import {
   LineChart,
   RefreshCw,
   ShieldAlert,
-  TrendingUp
+  TrendingUp,
+  X
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
@@ -70,6 +71,7 @@ export default function LongTermPage() {
   const [selected, setSelected] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [mobilePickOpen, setMobilePickOpen] = useState(false);
 
   async function load() {
     setError("");
@@ -173,7 +175,7 @@ export default function LongTermPage() {
                     return (
                       <tr
                         key={pick.symbol}
-                        onClick={() => setSelected(pick.symbol)}
+                        onClick={() => { setSelected(pick.symbol); setMobilePickOpen(true); }}
                         className={`cursor-pointer border-t border-bg-line transition ${
                           isSelected ? "bg-gain/[0.06]" : "hover:bg-bg-raised/50"
                         }`}
@@ -222,7 +224,7 @@ export default function LongTermPage() {
         </div>
 
         {/* Detail */}
-        <aside className="panel p-4 lg:sticky lg:top-20 lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto">
+        <aside className="panel hidden p-4 lg:block lg:sticky lg:top-20 lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto">
           {active ? (
             <LongTermDetail pick={active} />
           ) : (
@@ -236,6 +238,12 @@ export default function LongTermPage() {
       <footer className="mt-6 text-center text-[11px] text-ink-subtle">
         วิเคราะห์เชิงเทรนด์จากราคาย้อนหลัง 1 ปี · ไม่ใช่คำแนะนำการลงทุน
       </footer>
+
+      <MobilePickDrawer
+        open={mobilePickOpen}
+        onClose={() => setMobilePickOpen(false)}
+        pick={active}
+      />
     </main>
   );
 }
@@ -347,5 +355,45 @@ function Metric({ label, value, tone = "text-ink" }: { label: string; value: str
       <div className="text-[10px] text-ink-subtle">{label}</div>
       <div className={`stat-number text-sm font-semibold tabular-nums ${tone}`}>{value}</div>
     </div>
+  );
+}
+
+function MobilePickDrawer({
+  open,
+  onClose,
+  pick
+}: {
+  open: boolean;
+  onClose: () => void;
+  pick: LongTermPick | undefined;
+}) {
+  if (!pick) return null;
+  return (
+    <>
+      <div
+        className={`fixed inset-0 z-40 bg-black/60 backdrop-blur-sm transition-opacity lg:hidden ${
+          open ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"
+        }`}
+        onClick={onClose}
+      />
+      <div
+        className={`fixed bottom-0 left-0 right-0 z-50 max-h-[88dvh] overflow-y-auto rounded-t-2xl border-t border-bg-line bg-bg-surface p-4 transition-transform duration-300 ease-out lg:hidden ${
+          open ? "translate-y-0" : "translate-y-full"
+        }`}
+      >
+        <div className="relative mb-4 flex items-center justify-center">
+          <div className="h-1 w-10 rounded-full bg-bg-line" />
+          <button
+            type="button"
+            onClick={onClose}
+            className="absolute right-0 rounded-lg border border-bg-line p-1.5 text-ink-subtle hover:text-ink"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <LongTermDetail pick={pick} />
+        <div className="h-4" />
+      </div>
+    </>
   );
 }
