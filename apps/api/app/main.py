@@ -380,12 +380,15 @@ async def _handle_bot_command(command: str, chat_id: str) -> None:
         if cmd in ("/surge", "/surges", "/ziing", "/ซิ่ง"):
             signals = get_surge_signal_dicts(limit=10)
             if not signals:
-                await telegram.send_message("🔄 ยังไม่มีข้อมูล กำลังสแกนหุ้น... รอสักครู่", chat_id=chat_id)
+                await telegram.send_message("🔄 ยังไม่มีข้อมูล กำลังสแกน+คัดกรองด้วย AI... รอ 1-2 นาที", chat_id=chat_id)
                 signals = await _run_scan_and_get("surge", limit=10)
-            lines = ["🚀 หุ้นซิ่ง Top 10\n"]
+            lines = ["🚀 หุ้นซิ่ง Top 10 (คัดกรองโดย AI)\n"]
             if signals:
                 for i, s in enumerate(signals, 1):
                     lines.append(_format_surge_line(s, i))
+                    reason = (s.get("reason") or "").strip()
+                    if reason:
+                        lines.append(f"   💡 {reason}")
             else:
                 lines.append("— ยังไม่พบหุ้นที่เข้าเกณฑ์ —")
             await telegram.send_message("\n".join(lines), chat_id=chat_id)
@@ -473,7 +476,11 @@ async def telegram_webhook(update: dict) -> dict:
     if not text or not chat_id:
         return {"ok": True}
 
-    await _handle_bot_command(text, chat_id)
+    # fire-and-forget: ตอบ Telegram 200 ทันที ไม่ให้ webhook timeout แล้ว retry
+    # (การ scan ใช้เวลานาน บอทจะส่งข้อความกลับเองผ่าน chat_id เมื่อเสร็จ)
+    import asyncio
+
+    asyncio.create_task(_handle_bot_command(text, chat_id))
     return {"ok": True}
 
 

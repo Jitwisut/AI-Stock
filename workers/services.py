@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -32,6 +33,8 @@ from workers.scoring import build_signal
 from workers.serializers import signal_to_dict, stock_to_dict
 from workers.data_models import Stock
 
+logger = logging.getLogger(__name__)
+
 # แคชผลสแกนสดช่วงสั้น ๆ เพื่อไม่ให้ทุก request (dashboard + หน้าซิ่ง) ยิงสแกน
 # ทั้ง universe ซ้ำกัน ซึ่งช้าและเสี่ยงโดน rate-limit จาก public endpoint
 _POOL_CACHE: dict = {"ts": 0.0, "data": None}
@@ -61,12 +64,8 @@ def _serialized_signal_pool(force: bool = False) -> list[dict]:
     return data
 
 
-def _serialized_surge_pool(force: bool = False) -> list[dict]:
-    """สแกนหุ้นซิ่งโดยใช้ surge ranking แยกจาก dashboard momentum ranking."""
-    now = time.time()
-    cache = _SURGE_CACHE
-    if not force and cache["data"] is not None and now - cache["ts"] < _POOL_TTL_SECONDS:
-        return cache["data"]
+def _surge_signal_models(force: bool = False) -> list:
+    """สแกนหุ้นซิ่ง คืน SignalScore objects (ยังไม่ serialize) สำหรับ persist/AI screening."""
     settings = get_settings()
     stocks = fetch_surge_stock_universe(
         settings.surge_extra_symbols,
@@ -85,6 +84,28 @@ def _serialized_surge_pool(force: bool = False) -> list[dict]:
         backfill_min_change=settings.surge_backfill_min_change_percent,
         min_results=settings.surge_min_results,
     )
+    return _filter_surge_junk(selected)
+
+
+def _filter_surge_junk(signals: list) -> list:
+    """กรองหุ้นขยะออก: penny ต่ำกว่า $1 และ gap เกิน 100% (เสี่ยงโดน halt/ผันผวนรุนแรง).
+
+    ถ้ากรองแล้วเหลือน้อยเกินไป (<10) คืนชุดเดิมเพื่อไม่ให้ว่าง.
+    """
+    cleaned = [
+        s for s in signals
+        if (s.latest_price or 0) >= 1.0 and (s.gap_percent or 0) <= 100.0
+    ]
+    return cleaned if len(cleaned) >= 10 else signals
+
+
+def _serialized_surge_pool(force: bool = False) -> list[dict]:
+    """สแกนหุ้นซิ่งโดยใช้ surge ranking แยกจาก dashboard momentum ranking."""
+    now = time.time()
+    cache = _SURGE_CACHE
+    if not force and cache["data"] is not None and now - cache["ts"] < _POOL_TTL_SECONDS:
+        return cache["data"]
+    selected = _surge_signal_models(force=force)
     data = [signal_to_dict(signal) for signal in selected]
     cache["data"] = data
     cache["ts"] = now
@@ -299,6 +320,30 @@ def execute_scan_job(
                 )
                 return {"scan_run_id": scan_run_id, "status": "completed", "longterm": results}
 
+            if kind == "surge":
+                models = _surge_signal_models(force=True)
+                selected = _run_async_scan(_gemini_screen_surge(models, limit=10))
+                saved_ids = save_signals(
+                    selected, settings.database_url, scan_run_id=scan_run_id
+                )
+                _SURGE_CACHE["data"] = [signal_to_dict(s) for s in selected]
+                _SURGE_CACHE["ts"] = time.time()
+                update_scan_run(
+                    settings.database_url,
+                    scan_run_id,
+                    status="completed",
+                    universe_count=len(models),
+                    scanned_count=len(selected),
+                    failed_count=0,
+                    error=None,
+                    finish=True,
+                )
+                return {
+                    "scan_run_id": scan_run_id,
+                    "status": "completed",
+                    "surge": len(saved_ids),
+                }
+
             if kind == "universe_refresh":
                 stocks = fetch_stock_universe(
                     mode=settings.universe_mode,
@@ -356,6 +401,71 @@ def get_latest_signal_dicts(limit: int = 5) -> list[dict]:
         return []
     pool = _serialized_signal_pool()
     return sorted(pool, key=lambda item: item.get("score", 0), reverse=True)[:limit]
+
+
+async def _gemini_screen_surge(models: list, limit: int = 10) -> list:
+    """ใช้ Gemini คัดเลือกหุ้นซิ่งที่ดีที่สุด `limit` ตัว + เขียนเหตุผลสั้นๆ ลง signal.reason.
+
+    Fallback: ถ้า Gemini ใช้ไม่ได้/ผิดพลาด → เลือก top `limit` ตาม surge_score เดิม.
+    """
+    settings = get_settings()
+    # เรียงตาม surge_score ก่อนเสมอ เผื่อ fallback
+    ranked = sorted(models, key=lambda s: surge_score(s), reverse=True)
+
+    if not settings.gemini_api_key or settings.ai_provider != "gemini" or len(ranked) <= limit:
+        return ranked[:limit]
+
+    # ส่งเฉพาะ candidate ชั้นนำ (สูงสุด 30 ตัว) ให้ Gemini จัดอันดับ
+    candidates = ranked[: min(30, len(ranked))]
+    payload = [
+        {
+            "symbol": s.symbol,
+            "gap_percent": round(s.gap_percent or 0, 1),
+            "relative_volume": round(s.relative_volume or 0, 1),
+            "price": round(s.latest_price or 0, 2),
+            "surge_score": round(surge_score(s), 1),
+            "grade": surge_grade(s).get("grade"),
+        }
+        for s in candidates
+    ]
+    prompt = (
+        "คุณเป็นนักวิเคราะห์หุ้นซิ่ง (momentum day-trade) ของตลาดหุ้น US\n"
+        f"จากรายการหุ้นด้านล่าง ให้เลือกหุ้นที่น่าสนใจที่สุด {limit} ตัว "
+        "โดยพิจารณาจาก momentum, volume, ความเสี่ยง และคุณภาพโดยรวม "
+        "(หลีกเลี่ยงหุ้นที่เสี่ยงเกินไปหรือ gap สูงผิดปกติจนน่าจะโดน halt)\n"
+        "ตอบกลับเป็น JSON array เท่านั้น แต่ละ element มี key: symbol, reason "
+        '(reason = เหตุผลภาษาไทยสั้นๆ ไม่เกิน 60 ตัวอักษร ไม่ชี้นำให้ซื้อ)\n'
+        'ตัวอย่าง: [{"symbol":"ABC","reason":"วอลุ่มหนุนชัด ทะลุแนวต้าน"}]\n\n'
+        f"หุ้น: {payload}"
+    )
+    try:
+        from workers.ai.gemini_client import generate_gemini_text
+
+        text = await generate_gemini_text(
+            prompt, api_key=settings.gemini_api_key, model=settings.gemini_model, temperature=0.2
+        )
+        # ตัด markdown code fence ถ้ามี
+        cleaned = text.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+        picks = json.loads(cleaned)
+        from dataclasses import replace
+
+        by_symbol = {s.symbol: s for s in candidates}
+        result = []
+        for pick in picks:
+            sym = pick.get("symbol")
+            signal = by_symbol.get(sym)
+            if signal is None:
+                continue
+            reason = (pick.get("reason") or "").strip()
+            # SignalScore เป็น frozen dataclass — ใช้ replace แทนการ set field
+            result.append(replace(signal, reason=reason) if reason else signal)
+            if len(result) >= limit:
+                break
+        if result:
+            return result
+    except Exception:
+        logger.warning("Gemini surge screening failed, falling back to surge_score", exc_info=True)
+    return ranked[:limit]
 
 
 def get_surge_signal_dicts(limit: int = 10) -> list[dict]:
@@ -674,20 +784,27 @@ def _save_longterm_to_signals(results: list[dict], database_url: str, scan_run_i
 @contextmanager
 def _redis_lock(name: str, timeout_seconds: int):
     settings = get_settings()
+    # พยายาม acquire lock — ถ้า Redis ใช้ไม่ได้ (import/connect ล้มเหลว) ก็รันต่อโดยไม่มี lock
+    lock = None
     try:
         from redis import Redis
 
-        client = Redis.from_url(settings.redis_url)
-        lock = client.lock(name, timeout=timeout_seconds, blocking_timeout=1)
-        acquired = lock.acquire()
-        if not acquired:
-            raise RuntimeError(f"Scan lock is already held: {name}")
-        try:
-            yield
-        finally:
-            lock.release()
-    except (ImportError, Exception):
+        client = Redis.from_url(settings.redis_url, socket_connect_timeout=2, socket_timeout=2)
+        candidate = client.lock(name, timeout=timeout_seconds, blocking_timeout=1)
+        if candidate.acquire():
+            lock = candidate
+    except Exception:
+        logger.warning("redis lock unavailable for %s, running without lock", name)
+
+    # yield อยู่นอก try ของ setup เพื่อไม่ให้ exception ใน body ไป trigger yield ซ้ำ
+    try:
         yield
+    finally:
+        if lock is not None:
+            try:
+                lock.release()
+            except Exception:
+                pass
 
 
 def _run_async_scan(coro):
