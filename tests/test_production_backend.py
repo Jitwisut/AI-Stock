@@ -16,6 +16,7 @@ from workers.scanner.fetch_prices import (
     PolygonMarketDataProvider,
     _nasdaq_screener_row_to_market_snapshot,
     _polygon_snapshot_to_market_snapshot,
+    _yahoo_quote_to_market_snapshot,
     get_market_data_provider,
 )
 from workers.scanner import fetch_stocks
@@ -381,6 +382,28 @@ def test_nasdaq_screener_mapping_uses_percent_change() -> None:
     assert snapshot.data_source == "nasdaq_screener"
 
 
+def test_yahoo_quote_mapping_prefers_extended_hours_price() -> None:
+    snapshot = _yahoo_quote_to_market_snapshot(
+        {
+            "symbol": "RUNR",
+            "marketState": "POST",
+            "regularMarketPrice": 10.0,
+            "regularMarketTime": 1_700_000_000,
+            "postMarketPrice": 12.5,
+            "postMarketTime": 1_700_000_500,
+            "regularMarketPreviousClose": 9.5,
+            "regularMarketDayHigh": 10.2,
+            "regularMarketVolume": 2_500_000,
+            "averageDailyVolume10Day": 1_000_000,
+        }
+    )
+
+    assert snapshot.latest_price == 12.5
+    assert snapshot.premarket_price == 12.5
+    assert snapshot.data_source == "yahoo_quote_post"
+    assert round(snapshot.premarket_gap_percent, 2) == 31.58
+
+
 def test_surge_pool_scans_dedicated_surge_universe(monkeypatch) -> None:
     _reset_settings(
         monkeypatch,
@@ -419,7 +442,7 @@ def test_surge_pool_scans_dedicated_surge_universe(monkeypatch) -> None:
     workers.services._serialized_surge_pool(force=True)
 
     assert captured["sort_mode"] == "surge"
-    assert captured["include_news"] is False
+    assert captured["include_news"] is True
     assert captured["limit"] == 25
     assert {"MTEN", "CUPR", "HUBC", "TESTX"}.issubset(captured["symbols"])
     assert "NVDA" not in captured["symbols"]

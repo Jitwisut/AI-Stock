@@ -119,11 +119,22 @@ def surge_plan(signal: SignalScore | dict) -> dict:
     day_high = _value(signal, "day_high")
     prior_high = _value(signal, "prior_high")
     change = _value(signal, "gap_percent", "premarket_gap_percent")
+    data_source = _text_value(signal, "data_source").lower()
+    data_basis = (
+        "live quote + daily ref"
+        if "yahoo_quote" in data_source or "polygon" in data_source
+        else "daily"
+    )
+    basis_note = (
+        "ราคาอ้างอิงจาก quote สด/extended-hours แต่โซนเทรดยังใช้ daily reference ต้องรอ tape จริงยืนยัน"
+        if data_basis != "daily"
+        else "โซนอ้างอิงจากข้อมูล daily — ไม่ใช่ระดับ intraday จริง ต้องรอ confirmation"
+    )
 
     if price <= 0:
         return {
             "bias": "ไม่ชัดเจน",
-            "data_basis": "daily",
+            "data_basis": data_basis,
             "note": "ข้อมูลราคาไม่พอสำหรับประเมินโซนอ้างอิง",
             "entry_zone": None,
             "key_high": None,
@@ -162,8 +173,8 @@ def surge_plan(signal: SignalScore | dict) -> dict:
 
     return {
         "bias": bias,
-        "data_basis": "daily",
-        "note": "โซนอ้างอิงจากข้อมูล daily — ไม่ใช่ระดับ intraday จริง ต้องรอ confirmation",
+        "data_basis": data_basis,
+        "note": basis_note,
         "entry_zone": round(price, 2),
         "key_high": key_high,
         "stop": stop_level,
@@ -187,6 +198,14 @@ def _value(signal: SignalScore | dict, *keys: str) -> float:
         if isinstance(value, (int, float)):
             return float(value)
     return 0.0
+
+
+def _text_value(signal: SignalScore | dict, key: str) -> str:
+    if isinstance(signal, dict):
+        value = signal.get(key)
+    else:
+        value = getattr(signal, key, "")
+    return value if isinstance(value, str) else ""
 
 
 def _score_breakdown_value(signal: SignalScore | dict, key: str) -> float:

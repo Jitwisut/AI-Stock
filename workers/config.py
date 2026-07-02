@@ -110,6 +110,13 @@ class Settings:
     surge_min_change_percent: float
     surge_backfill_min_change_percent: float
     surge_min_results: int
+    surge_include_news: bool
+    surge_refresh_live_quotes: bool
+    surge_live_refresh_limit: int
+    surge_allow_live_refresh: bool
+    surge_db_max_age_minutes: int
+    surge_min_price: float
+    surge_max_gap_percent: float
 
 
 @lru_cache
@@ -152,15 +159,37 @@ def get_settings() -> Settings:
         surge_candidate_limit=_env_int("SURGE_CANDIDATE_LIMIT", default=120, minimum=10, maximum=500),
         surge_min_change_percent=_env_float(
             "SURGE_MIN_CHANGE_PERCENT",
-            default=50.0,
+            default=20.0,
             minimum=0.0,
             maximum=500.0,
         ),
         surge_backfill_min_change_percent=_env_float(
             "SURGE_BACKFILL_MIN_CHANGE_PERCENT",
-            default=10.0,
+            default=5.0,
             minimum=0.0,
             maximum=500.0,
         ),
         surge_min_results=_env_int("SURGE_MIN_RESULTS", default=50, minimum=1, maximum=100),
+        surge_include_news=_env_bool("SURGE_INCLUDE_NEWS", default=True),
+        surge_refresh_live_quotes=_env_bool("SURGE_REFRESH_LIVE_QUOTES", default=True),
+        surge_live_refresh_limit=_env_int(
+            "SURGE_LIVE_REFRESH_LIMIT",
+            default=150,
+            minimum=10,
+            maximum=500,
+        ),
+        surge_allow_live_refresh=_env_bool("SURGE_ALLOW_LIVE_REFRESH", default=True),
+        surge_db_max_age_minutes=_env_int(
+            "SURGE_DB_MAX_AGE_MINUTES",
+            default=15,
+            minimum=1,
+            maximum=240,
+        ),
+        surge_min_price=_env_float("SURGE_MIN_PRICE", default=0.2, minimum=0.0, maximum=10.0),
+        surge_max_gap_percent=_env_float(
+            "SURGE_MAX_GAP_PERCENT",
+            default=500.0,
+            minimum=10.0,
+            maximum=2000.0,
+        ),
     )

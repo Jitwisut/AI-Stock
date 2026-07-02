@@ -33,6 +33,9 @@ def risk_score(stock: Stock, snapshot: MarketSnapshot) -> tuple[float, list[str]
         risks.append("ราคาวิ่งเกิน 100% เสี่ยงย่อแรงหรือโดน halt ต้องรอ confirmation")
     elif snapshot.premarket_gap_percent >= 50:
         risks.append("ราคาวิ่งเกิน 50% เป็น High Risk Mover ไม่ควรไล่ราคาโดยไม่มีแผน")
+    if (snapshot.premarket_price or snapshot.latest_price) < 1:
+        score -= 2
+        risks.append("ราคาต่ำกว่า $1 เป็น penny stock สภาพคล่องและ spread อาจเหวี่ยงแรง")
     if stock.market_cap is not None and stock.market_cap < 2_000_000_000:
         score -= 3
         risks.append("market cap เล็ก มีความเสี่ยงด้านสภาพคล่อง")

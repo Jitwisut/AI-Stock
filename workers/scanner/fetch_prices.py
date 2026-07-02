@@ -125,29 +125,7 @@ class YahooMarketDataProvider(MarketDataProvider):
         if not results:
             raise ValueError(f"No Yahoo Finance quote found for {symbol}")
 
-        quote = results[0]
-        previous_close = _number(quote, "regularMarketPreviousClose", "previousClose")
-        latest_price = _number(quote, "regularMarketPrice", "postMarketPrice", "preMarketPrice")
-        premarket_price = _optional_number(quote, "preMarketPrice", "regularMarketPrice")
-        day_high = _number(quote, "regularMarketDayHigh", "regularMarketPrice")
-        prior_high = _number(quote, "fiftyTwoWeekHigh", "regularMarketDayHigh", "regularMarketPrice")
-        volume = int(_number(quote, "regularMarketVolume", "averageDailyVolume3Month", default=0))
-        average_volume = int(
-            _number(quote, "averageDailyVolume3Month", "averageDailyVolume10Day", default=volume or 1)
-        )
-
-        return MarketSnapshot(
-            symbol=symbol,
-            previous_close=previous_close,
-            latest_price=latest_price,
-            premarket_price=premarket_price,
-            day_high=day_high,
-            prior_high=prior_high,
-            volume=volume,
-            average_volume_20d=average_volume,
-            updated_at=datetime.now(timezone.utc),
-            data_source=self.name,
-        )
+        return _yahoo_quote_to_market_snapshot(results[0], default_symbol=symbol)
 
     def get_snapshots(self, symbols: list[str]) -> dict[str, MarketSnapshot]:
         snapshots: dict[str, MarketSnapshot] = {}
@@ -169,40 +147,10 @@ class YahooMarketDataProvider(MarketDataProvider):
                 if not symbol:
                     continue
                 try:
-                    previous_close = _number(quote, "regularMarketPreviousClose", "previousClose")
-                    latest_price = _number(quote, "regularMarketPrice", "postMarketPrice", "preMarketPrice")
-                    premarket_price = _optional_number(quote, "preMarketPrice", "regularMarketPrice")
-                    day_high = _number(quote, "regularMarketDayHigh", "regularMarketPrice")
-                    prior_high = _number(
-                        quote,
-                        "fiftyTwoWeekHigh",
-                        "regularMarketDayHigh",
-                        "regularMarketPrice",
-                    )
-                    volume = int(_number(quote, "regularMarketVolume", "averageDailyVolume3Month", default=0))
-                    average_volume = int(
-                        _number(
-                            quote,
-                            "averageDailyVolume3Month",
-                            "averageDailyVolume10Day",
-                            default=volume or 1,
-                        )
-                    )
+                    snapshot = _yahoo_quote_to_market_snapshot(quote, default_symbol=symbol)
                 except ValueError:
                     continue
-
-                snapshots[symbol] = MarketSnapshot(
-                    symbol=symbol,
-                    previous_close=previous_close,
-                    latest_price=latest_price,
-                    premarket_price=premarket_price,
-                    day_high=day_high,
-                    prior_high=prior_high,
-                    volume=volume,
-                    average_volume_20d=max(1, average_volume),
-                    updated_at=datetime.now(timezone.utc),
-                    data_source=self.name,
-                )
+                snapshots[symbol] = snapshot
         return snapshots
 
 
@@ -519,6 +467,98 @@ class NasdaqMarketDataProvider(MarketDataProvider):
         )
 
 
+def _yahoo_quote_to_market_snapshot(quote: dict, default_symbol: str = "") -> MarketSnapshot:
+    symbol = (quote.get("symbol") or default_symbol).upper()
+    if not symbol:
+        raise ValueError("Missing Yahoo Finance quote symbol")
+
+    latest_price, session, updated_at = _best_yahoo_quote_price(quote)
+    previous_close = _number(quote, "regularMarketPreviousClose", "previousClose")
+    day_high = _number(
+        quote,
+        "regularMarketDayHigh",
+        "regularMarketPrice",
+        "postMarketPrice",
+        "preMarketPrice",
+        default=latest_price,
+    )
+    volume = int(
+        _number(
+            quote,
+            "regularMarketVolume",
+            "preMarketVolume",
+            "postMarketVolume",
+            "averageDailyVolume10Day",
+            default=0,
+        )
+    )
+    average_volume = int(
+        _number(
+            quote,
+            "averageDailyVolume10Day",
+            "averageDailyVolume3Month",
+            default=volume or 1,
+        )
+    )
+
+    # Yahoo's quote endpoint does not provide a rolling 20-day high. Use the
+    # previous close as the prior reference for pure quote snapshots; surge
+    # scans that start from historical/bulk data preserve their richer prior_high
+    # when refreshed with this live quote.
+    prior_high = previous_close
+    data_source = YahooMarketDataProvider.name if session == "regular" else f"{YahooMarketDataProvider.name}_{session}"
+    return MarketSnapshot(
+        symbol=symbol,
+        previous_close=previous_close,
+        latest_price=latest_price,
+        premarket_price=latest_price,
+        day_high=max(day_high, latest_price),
+        prior_high=prior_high,
+        volume=volume,
+        average_volume_20d=max(1, average_volume),
+        updated_at=updated_at,
+        data_source=data_source,
+    )
+
+
+def _best_yahoo_quote_price(quote: dict) -> tuple[float, str, datetime]:
+    state = str(quote.get("marketState") or "").upper()
+    candidates = [
+        ("regular", _optional_number(quote, "regularMarketPrice"), quote.get("regularMarketTime")),
+        ("pre", _optional_number(quote, "preMarketPrice"), quote.get("preMarketTime")),
+        ("post", _optional_number(quote, "postMarketPrice"), quote.get("postMarketTime")),
+    ]
+    usable = [
+        (session, float(price), int(timestamp or 0))
+        for session, price, timestamp in candidates
+        if isinstance(price, (int, float)) and price > 0
+    ]
+    if not usable:
+        raise ValueError("Missing Yahoo quote price")
+
+    if state in {"PRE", "PREPRE"}:
+        preferred = next((item for item in usable if item[0] == "pre"), None)
+        if preferred:
+            return preferred[1], preferred[0], _datetime_from_epoch_seconds(preferred[2])
+    if state in {"POST", "POSTPOST"}:
+        preferred = next((item for item in usable if item[0] == "post"), None)
+        if preferred:
+            return preferred[1], preferred[0], _datetime_from_epoch_seconds(preferred[2])
+    if state in {"REGULAR", "OPEN"}:
+        preferred = next((item for item in usable if item[0] == "regular"), None)
+        if preferred:
+            return preferred[1], preferred[0], _datetime_from_epoch_seconds(preferred[2])
+
+    latest = max(usable, key=lambda item: item[2])
+    return latest[1], latest[0], _datetime_from_epoch_seconds(latest[2])
+
+
+def _datetime_from_epoch_seconds(value) -> datetime:
+    if isinstance(value, (int, float)) and value > 0:
+        return datetime.fromtimestamp(value, timezone.utc)
+    return datetime.now(timezone.utc)
+
+
 def _money(value: str | int | float) -> float:
     """แปลงค่าราคา/วอลุ่มจาก Nasdaq เช่น "$205.19" หรือ "112,345,300"."""
     if isinstance(value, (int, float)):
@@ -695,6 +735,22 @@ def get_market_data_provider(use_live_data: bool | None = None) -> MarketDataPro
 
     if not providers:
         raise RuntimeError("No live market data provider is configured")
+    if len(providers) == 1:
+        return providers[0]
+    return LiveFallbackMarketDataProvider(providers)
+
+
+def get_realtime_market_data_provider() -> MarketDataProvider | None:
+    """Best available intraday/extended-hours quote source for refreshing finalists."""
+    settings = get_settings()
+    if not settings.use_live_data:
+        return None
+
+    providers: list[MarketDataProvider] = []
+    if settings.polygon_api_key:
+        providers.append(PolygonMarketDataProvider(settings.polygon_api_key))
+    providers.append(YahooMarketDataProvider())
+
     if len(providers) == 1:
         return providers[0]
     return LiveFallbackMarketDataProvider(providers)

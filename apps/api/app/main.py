@@ -277,9 +277,12 @@ def latest_signals(limit: int = Query(default=5, ge=1, le=20)) -> list[dict]:
 
 
 @app.get("/signals/surge", response_model=list[SignalOut])
-def surge_signals(limit: int = Query(default=50, ge=1, le=100)) -> list[dict]:
+def surge_signals(
+    limit: int = Query(default=50, ge=1, le=100),
+    fresh: bool = Query(default=False),
+) -> list[dict]:
     """หุ้นซิ่งสำหรับสายถือไว-ออกไว เรียงตาม surge_score (สแกนสด)."""
-    return get_surge_signal_dicts(limit=limit)
+    return get_surge_signal_dicts(limit=limit, fresh=fresh)
 
 
 @app.get("/signals/longterm", response_model=list[LongTermOut])

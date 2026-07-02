@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import logging
+import math
 import time
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
+from datetime import datetime, timezone
 
 from workers.ai.analyze_stock import analyze_stock_with_ai
 from workers.ai.summarize_signal import summarize_signals
@@ -23,7 +25,10 @@ from workers.repository import (
     update_scan_run,
     upsert_stocks,
 )
-from workers.scanner.fetch_prices import get_market_data_provider
+from workers.scanner.fetch_prices import (
+    get_market_data_provider,
+    get_realtime_market_data_provider,
+)
 from workers.scanner.fetch_stocks import fetch_stock_universe, fetch_surge_stock_universe
 from workers.news.fetch_news import get_news_provider
 from workers.longterm import longterm_to_dict
@@ -31,7 +36,7 @@ from workers.recommendations import surge_grade, surge_plan, surge_score
 from workers.scanner.fetch_history import get_history_provider
 from workers.scoring import build_signal
 from workers.serializers import signal_to_dict, stock_to_dict
-from workers.data_models import Stock
+from workers.data_models import MarketSnapshot, Stock
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +81,7 @@ def _surge_signal_models(force: bool = False) -> list:
         settings.surge_candidate_limit,
         stocks=stocks,
         sort_mode="surge",
-        include_news=False,
+        include_news=settings.surge_include_news,
     )["signals"]
     selected = _select_surge_signals(
         signals,
@@ -88,13 +93,15 @@ def _surge_signal_models(force: bool = False) -> list:
 
 
 def _filter_surge_junk(signals: list) -> list:
-    """กรองหุ้นขยะออก: penny ต่ำกว่า $1 และ gap เกิน 100% (เสี่ยงโดน halt/ผันผวนรุนแรง).
+    """กรองเฉพาะตัวที่ข้อมูล/ราคาเสี่ยงเกินไป แต่ยังเปิดทางให้ penny mover ที่มีสภาพคล่อง.
 
-    ถ้ากรองแล้วเหลือน้อยเกินไป (<10) คืนชุดเดิมเพื่อไม่ให้ว่าง.
+    ถ้ากรองแล้วเหลือน้อยเกินไป (<10) คืนชุดเดิมเพื่อไม่ให้หน้า surge ว่างในวันที่ตลาดเงียบ.
     """
+    settings = get_settings()
     cleaned = [
         s for s in signals
-        if (s.latest_price or 0) >= 1.0 and (s.gap_percent or 0) <= 100.0
+        if (s.latest_price or 0) >= settings.surge_min_price
+        and (s.gap_percent or 0) <= settings.surge_max_gap_percent
     ]
     return cleaned if len(cleaned) >= 10 else signals
 
@@ -141,7 +148,18 @@ def scan_market(
     failures = max(0, len(stocks) - len(price_candidates))
 
     price_candidates.sort(key=lambda item: item[2], reverse=True)
-    selected_candidates = price_candidates[: max(limit, settings.ai_candidate_limit)]
+    candidate_limit = max(limit, settings.ai_candidate_limit)
+    if sort_mode == "surge" and settings.surge_refresh_live_quotes:
+        candidate_limit = max(candidate_limit, settings.surge_live_refresh_limit)
+    selected_candidates = price_candidates[:candidate_limit]
+
+    if sort_mode == "surge" and settings.surge_refresh_live_quotes:
+        selected_candidates = _refresh_candidates_with_realtime_quotes(
+            selected_candidates,
+            max_symbols=settings.surge_live_refresh_limit,
+        )
+        selected_candidates.sort(key=lambda item: item[2], reverse=True)
+        selected_candidates = selected_candidates[:candidate_limit]
 
     news_by_symbol: dict[str, list] = {}
     if include_news:
@@ -468,7 +486,7 @@ async def _gemini_screen_surge(models: list, limit: int = 10) -> list:
     return ranked[:limit]
 
 
-def get_surge_signal_dicts(limit: int = 10) -> list[dict]:
+def get_surge_signal_dicts(limit: int = 10, *, fresh: bool = False) -> list[dict]:
     """หุ้น "ซิ่ง" สำหรับสายถือไว-ออกไว — DB-first (เร็ว <1 วิ) fallback สแกนสดเฉพาะ dev.
 
     บน production (Vercel + Neon) อ่านจากฐานข้อมูลที่ Celery beat บน Railway
@@ -477,19 +495,39 @@ def get_surge_signal_dicts(limit: int = 10) -> list[dict]:
     settings = get_settings()
     from workers.repository import latest_signals_by_kind
 
+    if fresh and settings.surge_allow_live_refresh:
+        refreshed = _try_live_surge_pool(limit, force=True)
+        if refreshed:
+            return refreshed
+
     rows = latest_signals_by_kind(settings.database_url, kind="surge", limit=limit)
     if rows:
+        if (
+            settings.surge_allow_live_refresh
+            and _signal_rows_are_stale(rows, settings.surge_db_max_age_minutes)
+        ):
+            refreshed = _try_live_surge_pool(limit, force=True)
+            if refreshed:
+                return refreshed
         return rows[:limit]
 
-    # Fallback: สแกนสด (เฉพาะ dev / staging)
-    if settings.app_env != "production":
-        return _surge_pool_fallback(limit)
+    # Fallback: สแกนสดเมื่อไม่มี DB หรือผู้ใช้เปิด live refresh.
+    if settings.app_env != "production" or settings.surge_allow_live_refresh:
+        return _try_live_surge_pool(limit, force=False)
     return []
 
 
-def _surge_pool_fallback(limit: int) -> list[dict]:
+def _try_live_surge_pool(limit: int, *, force: bool) -> list[dict]:
+    try:
+        return _surge_pool_fallback(limit, force=force)
+    except Exception:
+        logger.warning("live surge fallback failed", exc_info=True)
+        return []
+
+
+def _surge_pool_fallback(limit: int, *, force: bool = False) -> list[dict]:
     """สแกนสด surge pool (ใช้ตอน dev หรือไม่มี DB)."""
-    pool = _serialized_surge_pool()
+    pool = _serialized_surge_pool(force=force)
 
     enriched: list[dict] = []
     for row in pool:
@@ -820,9 +858,88 @@ def _run_async_scan(coro):
     return asyncio.run(coro)
 
 
+def _refresh_candidates_with_realtime_quotes(
+    candidates: list[tuple[Stock, MarketSnapshot, float]],
+    *,
+    max_symbols: int,
+) -> list[tuple[Stock, MarketSnapshot, float]]:
+    if not candidates or max_symbols <= 0:
+        return candidates
+
+    provider = get_realtime_market_data_provider()
+    if provider is None:
+        return candidates
+
+    symbols = [stock.symbol for stock, _snapshot, _score in candidates[:max_symbols]]
+    try:
+        refreshed = provider.get_snapshots(symbols)
+    except Exception:
+        logger.warning("realtime quote refresh failed", exc_info=True)
+        return candidates
+    if not refreshed:
+        return candidates
+
+    updated: list[tuple[Stock, MarketSnapshot, float]] = []
+    for stock, snapshot, score in candidates:
+        fresh = refreshed.get(stock.symbol.upper())
+        if fresh is None:
+            updated.append((stock, snapshot, score))
+            continue
+        merged = _merge_realtime_snapshot(snapshot, fresh)
+        updated.append((stock, merged, _price_candidate_score(merged)))
+    return updated
+
+
+def _merge_realtime_snapshot(original: MarketSnapshot, fresh: MarketSnapshot) -> MarketSnapshot:
+    latest_price = fresh.premarket_price or fresh.latest_price
+    previous_close = fresh.previous_close or original.previous_close
+    volume = fresh.volume or original.volume
+    average_volume = fresh.average_volume_20d or original.average_volume_20d
+    return MarketSnapshot(
+        symbol=original.symbol,
+        previous_close=previous_close,
+        latest_price=latest_price,
+        premarket_price=latest_price,
+        day_high=max(original.day_high, fresh.day_high, latest_price),
+        prior_high=original.prior_high if original.prior_high > 0 else fresh.prior_high,
+        volume=volume,
+        average_volume_20d=max(1, average_volume),
+        updated_at=fresh.updated_at,
+        data_source=fresh.data_source,
+    )
+
+
+def _signal_rows_are_stale(rows: list[dict], max_age_minutes: int) -> bool:
+    newest = None
+    for row in rows:
+        candidate = _parse_iso_datetime(row.get("provider_updated_at") or row.get("created_at"))
+        if candidate and (newest is None or candidate > newest):
+            newest = candidate
+    if newest is None:
+        return True
+    return (datetime.now(timezone.utc) - newest).total_seconds() > max_age_minutes * 60
+
+
+def _parse_iso_datetime(value) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
 def _price_candidate_score(snapshot) -> float:
+    price = snapshot.premarket_price or snapshot.latest_price
+    gap = max(0.0, snapshot.premarket_gap_percent)
+    dollar_volume = max(0.0, price * snapshot.volume)
+    small_price_bonus = 18.0 if 0.2 <= price <= 10 and gap >= 3 else 0.0
+    liquidity_bonus = min(28.0, math.log10(dollar_volume + 1) * 3.2)
     return (
-        max(0.0, snapshot.premarket_gap_percent) * 3
-        + snapshot.relative_volume * 10
-        + (5 if snapshot.premarket_gap_percent >= 2 else 0)
+        gap * 4.0
+        + snapshot.relative_volume * 12.0
+        + liquidity_bonus
+        + small_price_bonus
+        + (8 if gap >= 2 else 0)
     )

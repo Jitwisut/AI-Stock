@@ -487,7 +487,7 @@ def latest_signals_by_kind(database_url: str, kind: str, limit: int = 10) -> lis
                 .mappings()
                 .all()
             )
-            if not rows:
+            if not rows and kind != "surge":
                 rows = connection.execute(sql_fallback, {"limit": _limit}).mappings().all()
         return [_normalize_signal_row(row) for row in rows]
     except Exception as exc:

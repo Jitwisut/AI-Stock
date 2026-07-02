@@ -8,6 +8,7 @@ import {
   Flame,
   Gauge,
   Info,
+  Newspaper,
   ShieldAlert,
   Target,
   TimerReset,
@@ -49,6 +50,12 @@ type SurgeGrade = {
   risk_note: string;
 };
 
+type NewsItem = {
+  title: string;
+  source?: string | null;
+  published_at?: string | null;
+};
+
 type SurgeSignal = {
   symbol: string;
   score: number;
@@ -57,9 +64,11 @@ type SurgeSignal = {
   relative_volume: number;
   latest_price: number;
   data_source?: string;
+  provider_updated_at?: string | null;
   catalyst: string;
   reason: string;
   risks: string[];
+  news?: NewsItem[];
   surge_grade?: SurgeGrade;
   surge_plan?: SurgePlan;
   created_at?: string | null;
@@ -97,11 +106,11 @@ export default function SurgePage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  async function loadSurge() {
+  async function loadSurge(fresh = false) {
     setError("");
     setLoading(true);
     try {
-      const response = await fetch(`${API_BASE_URL}/signals/surge?limit=50`, { cache: "no-store" });
+      const response = await fetch(`${API_BASE_URL}/signals/surge?limit=50&fresh=${fresh ? "true" : "false"}`, { cache: "no-store" });
       if (!response.ok) {
         throw new Error("เรียกข้อมูลหุ้นซิ่งไม่สำเร็จ");
       }
@@ -121,10 +130,11 @@ export default function SurgePage() {
     const total = signals.length;
     const sGrade = signals.filter((s) => s.surge_grade?.grade === "S").length;
     const breakout = signals.filter((s) => s.surge_grade?.has_breakout).length;
-    const avgVol = total
-      ? signals.reduce((sum, s) => sum + s.relative_volume, 0) / total
-      : 0;
-    return { total, sGrade, breakout, avgVol };
+    const latestUpdate = signals
+      .map((s) => Date.parse(s.provider_updated_at ?? s.created_at ?? ""))
+      .filter((value) => Number.isFinite(value))
+      .sort((a, b) => b - a)[0];
+    return { total, sGrade, breakout, latestUpdate };
   }, [signals]);
 
   return (
@@ -138,13 +148,13 @@ export default function SurgePage() {
           <div>
             <h1 className="text-lg font-semibold text-ink sm:text-xl">หุ้นซิ่ง · ถือไว ออกไว</h1>
             <p className="text-xs text-ink-muted">
-              สแกนกว้างทั้งตลาด US เพื่อจับ top movers หุ้นเล็ก/low-float และเติมตัวแรงรองลงมาให้เฝ้าดู
+              สแกนกว้างทั้งตลาด US แล้วรีเฟรชตัวเต็งด้วย quote สดเพื่อจับ top movers หุ้นเล็ก/low-float
             </p>
           </div>
         </div>
         <button
           type="button"
-          onClick={() => void loadSurge()}
+          onClick={() => void loadSurge(true)}
           disabled={loading}
           className="focus-ring inline-flex h-9 cursor-pointer items-center gap-2 self-start rounded-lg bg-gradient-to-r from-loss to-amber px-4 text-sm font-semibold text-white shadow-glow transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60 lg:self-auto"
         >
@@ -159,7 +169,7 @@ export default function SurgePage() {
         <p className="leading-6">
           ระดับราคาทั้งหมดเป็น <strong>โซนอ้างอิงจากข้อมูล daily</strong> ไม่ใช่ entry/exit แบบ intraday จริง
           ใช้เพื่อเฝ้าดูและวางแผน ต้องรอ confirmation จากราคา-วอลุ่มจริงก่อนตัดสินใจ
-          (หากต้องการระดับ intraday แม่นยำ ต้องต่อ data realtime เช่น Polygon/Alpaca)
+          ปุ่มสแกนใหม่จะขอ quote สดเท่าที่ provider รองรับ แต่ไม่ใช่คำรับประกันว่าหุ้นจะพุ่งแน่นอน
         </p>
       </div>
 
@@ -175,7 +185,7 @@ export default function SurgePage() {
         <StatTile icon={<Flame className="h-4 w-4" />} label="หุ้นซิ่งที่พบ" value={stats.total.toString()} tone="loss" loading={loading} />
         <StatTile icon={<Zap className="h-4 w-4" />} label="เกรด S" value={stats.sGrade.toString()} tone="amber" loading={loading} />
         <StatTile icon={<Target className="h-4 w-4" />} label="ทะลุไฮอ้างอิง" value={stats.breakout.toString()} tone="gain" loading={loading} />
-        <StatTile icon={<Gauge className="h-4 w-4" />} label="Rel. volume เฉลี่ย" value={`${stats.avgVol.toFixed(1)}x`} tone="violet" loading={loading} />
+        <StatTile icon={<Gauge className="h-4 w-4" />} label="อัปเดตล่าสุด" value={formatUpdateTime(stats.latestUpdate)} tone="violet" loading={loading} />
       </section>
 
       {/* Cards */}
@@ -218,6 +228,8 @@ function SurgeRow({ signal, rank }: { signal: SurgeSignal; rank: number }) {
     ? "down"
     : "flat";
   const analyzeHref = `/analyze?query=${encodeURIComponent(signal.symbol)}`;
+  const firstNews = signal.news?.[0];
+  const catalystText = firstNews?.title || signal.reason || signal.catalyst;
 
   return (
     <Link
@@ -242,6 +254,9 @@ function SurgeRow({ signal, rank }: { signal: SurgeSignal; rank: number }) {
                 <DataSourceBadge source={signal.data_source} />
               </div>
               <div className={`text-xs font-semibold ${style.text}`}>{grade?.label ?? "—"}</div>
+              <div className="mt-0.5 text-[10px] text-ink-subtle">
+                อัปเดต {formatUpdateTime(Date.parse(signal.provider_updated_at ?? signal.created_at ?? ""))}
+              </div>
             </div>
           </div>
           <div className="text-right">
@@ -286,6 +301,21 @@ function SurgeRow({ signal, rank }: { signal: SurgeSignal; rank: number }) {
           <div className="mt-3 flex items-start gap-2 rounded-xl border border-loss/25 bg-loss/10 px-3 py-2 text-[11px] leading-5 text-loss">
             <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
             <span>{grade.risk_note}</span>
+          </div>
+        ) : null}
+
+        {catalystText ? (
+          <div className="mt-3 flex items-start gap-2 rounded-xl border border-bg-line bg-bg-base/35 px-3 py-2 text-[11px] leading-5 text-ink-muted">
+            {firstNews ? (
+              <Newspaper className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent-cyan" />
+            ) : (
+              <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent-cyan" />
+            )}
+            <span>
+              <span className="font-medium text-ink">{firstNews ? "ข่าวล่าสุด: " : "เหตุผล: "}</span>
+              {catalystText}
+              {firstNews?.source ? <span className="text-ink-subtle"> ({firstNews.source})</span> : null}
+            </span>
           </div>
         ) : null}
 
@@ -358,6 +388,17 @@ function SurgeRow({ signal, rank }: { signal: SurgeSignal; rank: number }) {
       </div>
     </Link>
   );
+}
+
+function formatUpdateTime(timestamp?: number) {
+  if (!timestamp || !Number.isFinite(timestamp)) {
+    return "—";
+  }
+  return new Intl.DateTimeFormat("th-TH", {
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZoneName: "short"
+  }).format(new Date(timestamp));
 }
 
 function PlanLevel({
