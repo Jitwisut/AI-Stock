@@ -111,6 +111,8 @@ class Settings:
     surge_backfill_min_change_percent: float
     surge_min_results: int
     surge_include_news: bool
+    surge_use_dynamic_movers: bool
+    surge_dynamic_candidate_limit: int
     surge_refresh_live_quotes: bool
     surge_live_refresh_limit: int
     surge_allow_live_refresh: bool
@@ -171,6 +173,13 @@ def get_settings() -> Settings:
         ),
         surge_min_results=_env_int("SURGE_MIN_RESULTS", default=50, minimum=1, maximum=100),
         surge_include_news=_env_bool("SURGE_INCLUDE_NEWS", default=True),
+        surge_use_dynamic_movers=_env_bool("SURGE_USE_DYNAMIC_MOVERS", default=True),
+        surge_dynamic_candidate_limit=_env_int(
+            "SURGE_DYNAMIC_CANDIDATE_LIMIT",
+            default=800,
+            minimum=100,
+            maximum=5000,
+        ),
         surge_refresh_live_quotes=_env_bool("SURGE_REFRESH_LIVE_QUOTES", default=True),
         surge_live_refresh_limit=_env_int(
             "SURGE_LIVE_REFRESH_LIMIT",

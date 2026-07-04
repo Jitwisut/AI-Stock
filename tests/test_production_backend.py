@@ -13,7 +13,9 @@ from workers.scanner.fetch_prices import (
     FallbackMarketDataProvider,
     LiveFallbackMarketDataProvider,
     MockMarketDataProvider,
+    NasdaqScreenerMarketDataProvider,
     PolygonMarketDataProvider,
+    _nasdaq_quote_primary_data_to_market_snapshot,
     _nasdaq_screener_row_to_market_snapshot,
     _polygon_snapshot_to_market_snapshot,
     _yahoo_quote_to_market_snapshot,
@@ -21,7 +23,7 @@ from workers.scanner.fetch_prices import (
 )
 from workers.scanner import fetch_stocks
 from workers.scanner.fetch_stocks import fetch_surge_stock_universe
-from workers.data_models import SignalScore, Stock
+from workers.data_models import MarketSnapshot, SignalScore, Stock
 from workers.repository import _normalize_database_url
 
 
@@ -382,6 +384,43 @@ def test_nasdaq_screener_mapping_uses_percent_change() -> None:
     assert snapshot.data_source == "nasdaq_screener"
 
 
+def test_nasdaq_screener_can_discover_unrequested_symbols(monkeypatch) -> None:
+    provider = NasdaqScreenerMarketDataProvider()
+    monkeypatch.setattr(
+        provider,
+        "_fetch_rows",
+        lambda: [
+            {"symbol": "TINY", "lastsale": "$0.82", "pctchange": "44.00%", "volume": "980,000"},
+            {"symbol": "MEGA", "lastsale": "$120.00", "pctchange": "1.50%", "volume": "3,000,000"},
+        ],
+    )
+
+    snapshots = provider.get_all_snapshots()
+
+    assert {"TINY", "MEGA"}.issubset(snapshots)
+    assert snapshots["TINY"].latest_price == 0.82
+    assert round(snapshots["TINY"].premarket_gap_percent, 2) == 44.0
+
+
+def test_nasdaq_quote_mapping_uses_provider_timestamp() -> None:
+    snapshot = _nasdaq_quote_primary_data_to_market_snapshot(
+        "CLRO",
+        {
+            "lastSalePrice": "$6.48",
+            "percentageChange": "+101.24%",
+            "volume": "88,542,618",
+            "lastTradeTimestamp": "Jul 1, 2026",
+            "isRealTime": False,
+        },
+    )
+
+    assert snapshot.symbol == "CLRO"
+    assert snapshot.latest_price == 6.48
+    assert round(snapshot.premarket_gap_percent, 2) == 101.24
+    assert snapshot.updated_at.isoformat() == "2026-07-01T21:00:00+00:00"
+    assert snapshot.data_source == "nasdaq_quote_delayed"
+
+
 def test_yahoo_quote_mapping_prefers_extended_hours_price() -> None:
     snapshot = _yahoo_quote_to_market_snapshot(
         {
@@ -402,6 +441,49 @@ def test_yahoo_quote_mapping_prefers_extended_hours_price() -> None:
     assert snapshot.premarket_price == 12.5
     assert snapshot.data_source == "yahoo_quote_post"
     assert round(snapshot.premarket_gap_percent, 2) == 31.58
+
+
+def test_surge_scan_uses_dynamic_mover_symbols(monkeypatch) -> None:
+    _reset_settings(
+        monkeypatch,
+        APP_ENV="development",
+        USE_LIVE_DATA="false",
+        ALLOW_MOCK_DATA="true",
+        SURGE_USE_DYNAMIC_MOVERS="true",
+        SURGE_REFRESH_LIVE_QUOTES="false",
+        SURGE_DYNAMIC_CANDIDATE_LIMIT="100",
+    )
+
+    import workers.services
+
+    monkeypatch.setattr(
+        workers.services,
+        "_get_dynamic_surge_snapshots",
+        lambda _settings: {
+            "TINY": MarketSnapshot(
+                symbol="TINY",
+                previous_close=0.50,
+                latest_price=0.72,
+                premarket_price=0.72,
+                day_high=0.75,
+                prior_high=0.62,
+                volume=4_000_000,
+                average_volume_20d=500_000,
+                data_source="nasdaq_screener",
+            )
+        },
+    )
+
+    result = workers.services.scan_market(
+        limit=1,
+        stocks=[],
+        sort_mode="surge",
+        include_news=False,
+    )
+
+    assert result["signals"][0].symbol == "TINY"
+    assert result["signals"][0].gap_percent == 44.0
+    assert result["universe_symbol_count"] == 1
 
 
 def test_surge_pool_scans_dedicated_surge_universe(monkeypatch) -> None:

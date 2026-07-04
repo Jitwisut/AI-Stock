@@ -26,6 +26,7 @@ from workers.repository import (
     upsert_stocks,
 )
 from workers.scanner.fetch_prices import (
+    NasdaqScreenerMarketDataProvider,
     get_market_data_provider,
     get_realtime_market_data_provider,
 )
@@ -136,16 +137,31 @@ def scan_market(
     news_provider = get_news_provider(use_live_data=settings.use_live_data)
 
     price_candidates = []
-    stock_by_symbol = {stock.symbol: stock for stock in stocks}
-    snapshots = market_data.get_snapshots(list(stock_by_symbol))
+    stock_by_symbol = {stock.symbol.upper(): stock for stock in stocks}
+    if sort_mode == "surge" and settings.surge_use_dynamic_movers:
+        snapshots = _get_dynamic_surge_snapshots(settings)
+        if not snapshots:
+            snapshots = market_data.get_snapshots(list(stock_by_symbol))
+    else:
+        snapshots = market_data.get_snapshots(list(stock_by_symbol))
+
     for symbol, snapshot in snapshots.items():
-        stock = stock_by_symbol.get(symbol)
+        normalized = symbol.upper()
+        stock = stock_by_symbol.get(normalized)
+        if stock is None and sort_mode == "surge":
+            stock = Stock(
+                symbol=normalized,
+                name=normalized,
+                exchange="US",
+                sector="Dynamic Mover",
+            )
         if min_change_percent is not None and snapshot.premarket_gap_percent < min_change_percent:
             continue
         if stock:
             price_candidates.append((stock, snapshot, _price_candidate_score(snapshot)))
 
-    failures = max(0, len(stocks) - len(price_candidates))
+    discovery_count = len(snapshots) if sort_mode == "surge" and snapshots else len(stocks)
+    failures = max(0, discovery_count - len(price_candidates))
 
     price_candidates.sort(key=lambda item: item[2], reverse=True)
     candidate_limit = max(limit, settings.ai_candidate_limit)
@@ -199,7 +215,7 @@ def scan_market(
     return {
         "signals": signals[:limit],
         "scanned_symbol_count": len(price_candidates),
-        "universe_symbol_count": len(stocks),
+        "universe_symbol_count": discovery_count,
         "failed_symbol_count": failures,
         "candidate_symbol_count": len(selected_candidates),
         "provider": getattr(market_data, "name", "unknown"),
@@ -856,6 +872,49 @@ def _run_async_scan(coro):
     import asyncio
 
     return asyncio.run(coro)
+
+
+def _get_dynamic_surge_snapshots(settings) -> dict[str, MarketSnapshot]:
+    try:
+        snapshots = NasdaqScreenerMarketDataProvider().get_all_snapshots()
+    except Exception:
+        logger.warning("dynamic surge screener discovery failed", exc_info=True)
+        return {}
+
+    ranked = [
+        snapshot
+        for snapshot in snapshots.values()
+        if _is_viable_surge_snapshot(snapshot, settings)
+    ]
+    ranked.sort(key=_price_candidate_score, reverse=True)
+    return {
+        snapshot.symbol: snapshot
+        for snapshot in ranked[: settings.surge_dynamic_candidate_limit]
+    }
+
+
+def _is_viable_surge_snapshot(snapshot: MarketSnapshot, settings) -> bool:
+    if not _is_tradeable_common_symbol(snapshot.symbol):
+        return False
+    price = snapshot.premarket_price or snapshot.latest_price
+    if price < settings.surge_min_price:
+        return False
+    if snapshot.premarket_gap_percent <= 0:
+        return False
+    if snapshot.premarket_gap_percent > settings.surge_max_gap_percent:
+        return False
+    return True
+
+
+def _is_tradeable_common_symbol(symbol: str) -> bool:
+    normalized = symbol.upper().strip()
+    if not normalized or any(mark in normalized for mark in (".", "/", "^", "$")):
+        return False
+    # 5th-letter suffixes often represent warrants, rights, units, bankruptcy,
+    # or when-issued securities. Keep the surge feed focused on common shares.
+    if len(normalized) >= 5 and normalized[-1] in {"W", "R", "U", "V", "Q"}:
+        return False
+    return True
 
 
 def _refresh_candidates_with_realtime_quotes(

@@ -376,6 +376,24 @@ class NasdaqScreenerMarketDataProvider(MarketDataProvider):
         if not requested:
             return {}
 
+        all_snapshots = self.get_all_snapshots()
+        return {
+            symbol: snapshot
+            for symbol, snapshot in all_snapshots.items()
+            if symbol in requested
+        }
+
+    def get_all_snapshots(self) -> dict[str, MarketSnapshot]:
+        snapshots: dict[str, MarketSnapshot] = {}
+        for row in self._fetch_rows():
+            try:
+                snapshot = _nasdaq_screener_row_to_market_snapshot(row)
+            except (TypeError, ValueError, KeyError):
+                continue
+            snapshots[snapshot.symbol] = snapshot
+        return snapshots
+
+    def _fetch_rows(self) -> list[dict]:
         params = urlencode(
             {
                 "tableonly": "true",
@@ -387,17 +405,26 @@ class NasdaqScreenerMarketDataProvider(MarketDataProvider):
         request = Request(f"{self.screener_url}?{params}", headers=_BROWSER_HEADERS)
         with urlopen(request, timeout=30) as response:
             payload = json.loads(response.read().decode("utf-8"))
+        return ((payload.get("data") or {}).get("rows")) or []
 
-        rows = ((payload.get("data") or {}).get("rows")) or []
-        snapshots: dict[str, MarketSnapshot] = {}
-        for row in rows:
-            try:
-                snapshot = _nasdaq_screener_row_to_market_snapshot(row)
-            except (TypeError, ValueError, KeyError):
-                continue
-            if snapshot.symbol in requested:
-                snapshots[snapshot.symbol] = snapshot
-        return snapshots
+
+class NasdaqQuoteMarketDataProvider(MarketDataProvider):
+    """Per-symbol Nasdaq quote detail with the provider's actual timestamp."""
+
+    name = "nasdaq_quote"
+    info_url = "https://api.nasdaq.com/api/quote/{symbol}/info"
+
+    def get_snapshot(self, symbol: str) -> MarketSnapshot:
+        params = urlencode({"assetclass": "stocks"})
+        request = Request(
+            f"{self.info_url.format(symbol=symbol.upper())}?{params}",
+            headers=_BROWSER_HEADERS,
+        )
+        with urlopen(request, timeout=15) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+
+        primary_data = ((payload.get("data") or {}).get("primaryData")) or {}
+        return _nasdaq_quote_primary_data_to_market_snapshot(symbol, primary_data)
 
 
 class NasdaqMarketDataProvider(MarketDataProvider):
@@ -519,6 +546,49 @@ def _yahoo_quote_to_market_snapshot(quote: dict, default_symbol: str = "") -> Ma
         updated_at=updated_at,
         data_source=data_source,
     )
+
+
+def _nasdaq_quote_primary_data_to_market_snapshot(
+    symbol: str,
+    primary_data: dict,
+) -> MarketSnapshot:
+    latest_price = _table_number(primary_data.get("lastSalePrice"))
+    change_percent = _table_number(primary_data.get("percentageChange"), default=0)
+    denominator = 1 + (change_percent / 100)
+    previous_close = latest_price / denominator if denominator > 0 else latest_price
+    volume = int(_table_number(primary_data.get("volume"), default=0))
+    updated_at = _parse_nasdaq_quote_timestamp(primary_data.get("lastTradeTimestamp"))
+    is_realtime = bool(primary_data.get("isRealTime"))
+    data_source = NasdaqQuoteMarketDataProvider.name if is_realtime else f"{NasdaqQuoteMarketDataProvider.name}_delayed"
+    return MarketSnapshot(
+        symbol=symbol.upper(),
+        previous_close=previous_close,
+        latest_price=latest_price,
+        premarket_price=latest_price,
+        day_high=max(latest_price, previous_close),
+        prior_high=previous_close,
+        volume=volume,
+        average_volume_20d=max(1, volume),
+        updated_at=updated_at,
+        data_source=data_source,
+    )
+
+
+def _parse_nasdaq_quote_timestamp(value) -> datetime:
+    if not isinstance(value, str) or not value.strip():
+        return datetime.now(timezone.utc)
+    cleaned = value.strip().replace(" ET", "")
+    for fmt in ("%b %d, %Y %I:%M %p", "%b %d, %Y"):
+        try:
+            parsed = datetime.strptime(cleaned, fmt)
+        except ValueError:
+            continue
+        if fmt == "%b %d, %Y":
+            # Nasdaq sometimes provides date only; use an approximate US close
+            # time so stale-date comparisons are honest instead of "now".
+            parsed = parsed.replace(hour=21, minute=0)
+        return parsed.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc)
 
 
 def _best_yahoo_quote_price(quote: dict) -> tuple[float, str, datetime]:
@@ -720,17 +790,34 @@ def get_market_data_provider(use_live_data: bool | None = None) -> MarketDataPro
         if settings.polygon_api_key:
             providers.append(PolygonMarketDataProvider(settings.polygon_api_key))
         providers.extend(
-            [NasdaqMarketDataProvider(), YahooChartMarketDataProvider(), StooqMarketDataProvider()]
+            [
+                NasdaqQuoteMarketDataProvider(),
+                NasdaqMarketDataProvider(),
+                YahooChartMarketDataProvider(),
+                StooqMarketDataProvider(),
+            ]
         )
     elif provider_name == "stooq":
-        providers.extend([StooqMarketDataProvider(), NasdaqMarketDataProvider()])
+        providers.extend([StooqMarketDataProvider(), NasdaqQuoteMarketDataProvider(), NasdaqMarketDataProvider()])
     elif provider_name == "yahoo":
-        providers.extend([YahooMarketDataProvider(), YahooChartMarketDataProvider(), NasdaqMarketDataProvider()])
+        providers.extend(
+            [
+                YahooMarketDataProvider(),
+                NasdaqQuoteMarketDataProvider(),
+                YahooChartMarketDataProvider(),
+                NasdaqMarketDataProvider(),
+            ]
+        )
     else:
         # ค่าเริ่มต้น: Nasdaq ให้ราคา EOD จริงรายวันได้ฟรีและเสถียรสุด
         # แล้วค่อย fallback ไป Yahoo/Stooq หากบางตัวดึงไม่ได้
         providers.extend(
-            [NasdaqMarketDataProvider(), YahooChartMarketDataProvider(), StooqMarketDataProvider()]
+            [
+                NasdaqQuoteMarketDataProvider(),
+                NasdaqMarketDataProvider(),
+                YahooChartMarketDataProvider(),
+                StooqMarketDataProvider(),
+            ]
         )
 
     if not providers:
@@ -749,7 +836,13 @@ def get_realtime_market_data_provider() -> MarketDataProvider | None:
     providers: list[MarketDataProvider] = []
     if settings.polygon_api_key:
         providers.append(PolygonMarketDataProvider(settings.polygon_api_key))
-    providers.append(YahooMarketDataProvider())
+    providers.extend(
+        [
+            NasdaqQuoteMarketDataProvider(),
+            YahooMarketDataProvider(),
+            YahooChartMarketDataProvider(),
+        ]
+    )
 
     if len(providers) == 1:
         return providers[0]
