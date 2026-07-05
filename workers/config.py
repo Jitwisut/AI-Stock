@@ -115,6 +115,8 @@ class Settings:
     surge_dynamic_candidate_limit: int
     surge_refresh_live_quotes: bool
     surge_live_refresh_limit: int
+    surge_require_refreshed_quotes: bool
+    surge_max_data_age_hours: int
     surge_allow_live_refresh: bool
     surge_db_max_age_minutes: int
     surge_min_price: float
@@ -186,6 +188,13 @@ def get_settings() -> Settings:
             default=150,
             minimum=10,
             maximum=500,
+        ),
+        surge_require_refreshed_quotes=_env_bool("SURGE_REQUIRE_REFRESHED_QUOTES", default=True),
+        surge_max_data_age_hours=_env_int(
+            "SURGE_MAX_DATA_AGE_HOURS",
+            default=36,
+            minimum=1,
+            maximum=240,
         ),
         surge_allow_live_refresh=_env_bool("SURGE_ALLOW_LIVE_REFRESH", default=True),
         surge_db_max_age_minutes=_env_int(

@@ -174,11 +174,19 @@ def scan_market(
             selected_candidates,
             max_symbols=settings.surge_live_refresh_limit,
         )
+        selected_candidates = _filter_surge_fresh_candidates(
+            selected_candidates,
+            settings,
+        )
         selected_candidates.sort(key=lambda item: item[2], reverse=True)
         selected_candidates = selected_candidates[:candidate_limit]
 
     news_by_symbol: dict[str, list] = {}
     if include_news:
+        news_candidates = selected_candidates
+        if sort_mode == "surge":
+            news_limit = max(limit, settings.surge_min_results, 30)
+            news_candidates = selected_candidates[:news_limit]
         # ดึงข่าวแบบขนาน — เดิมเรียกทีละ symbol ทำให้สแกนรอบแรกช้ามาก
         # (ผู้ให้บริการข่าวยิง HTTP ต่อ symbol และบางแหล่งโดน rate-limit/timeout)
         def _news_for(stock):
@@ -187,11 +195,11 @@ def scan_market(
             except Exception:
                 return []
 
-        workers = max(1, min(settings.scan_workers, len(selected_candidates) or 1))
+        workers = max(1, min(settings.scan_workers, len(news_candidates) or 1))
         with ThreadPoolExecutor(max_workers=workers) as executor:
             futures = {
                 executor.submit(_news_for, stock): stock
-                for stock, _snapshot, _score in selected_candidates
+                for stock, _snapshot, _score in news_candidates
             }
             for future in as_completed(futures):
                 news_by_symbol[futures[future].symbol] = future.result()
@@ -915,6 +923,26 @@ def _is_tradeable_common_symbol(symbol: str) -> bool:
     if len(normalized) >= 5 and normalized[-1] in {"W", "R", "U", "V", "Q"}:
         return False
     return True
+
+
+def _filter_surge_fresh_candidates(
+    candidates: list[tuple[Stock, MarketSnapshot, float]],
+    settings,
+) -> list[tuple[Stock, MarketSnapshot, float]]:
+    if not candidates:
+        return candidates
+
+    max_age_seconds = settings.surge_max_data_age_hours * 60 * 60
+    now = datetime.now(timezone.utc)
+    fresh: list[tuple[Stock, MarketSnapshot, float]] = []
+    for stock, snapshot, score in candidates:
+        if settings.surge_require_refreshed_quotes and snapshot.data_source == "nasdaq_screener":
+            continue
+        age = (now - snapshot.updated_at).total_seconds()
+        if age > max_age_seconds:
+            continue
+        fresh.append((stock, snapshot, score))
+    return fresh
 
 
 def _refresh_candidates_with_realtime_quotes(
