@@ -16,6 +16,11 @@ class TelegramClient:
 
         import httpx
 
+        # Telegram sendMessage มี hard limit 4096 ตัวอักษร — เกินแล้วจะโดน 400
+        # และข้อความทั้งก้อนจะไม่ถูกส่งเลย จึงตัดไว้ก่อนกันพัง แทนที่จะปล่อยให้ raise
+        if len(text) > 4096:
+            text = text[:4090].rstrip() + "\n…"
+
         url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
         payload = {
             "chat_id": chat_id or self.chat_id,

@@ -341,6 +341,34 @@ def settings_status() -> dict:
 # ----------------------------------------------------------------------
 
 
+_FRESH_KEYWORDS = {"live", "fresh", "สด", "now", "ล่าสุด"}
+_TELEGRAM_MAX_CHARS = 4000  # margin below Telegram's 4096 hard limit
+
+
+def _parse_alert_arg(arg: str, *, default: int, min_count: int = 5, max_count: int = 30) -> tuple[int, bool]:
+    """แปลง argument ของ /surge, /longterm เป็น (จำนวนที่ขอ, ต้องการสแกนราคาสดไหม).
+
+    รองรับ "/surge 20" (จำนวน) และ "/surge live" (ขอราคาสดแทนแคช DB).
+    """
+    if not arg:
+        return default, False
+    token = arg.strip().lower()
+    if token in _FRESH_KEYWORDS:
+        return default, True
+    try:
+        count = int(token)
+    except ValueError:
+        return default, False
+    return max(min_count, min(max_count, count)), False
+
+
+def _clip_telegram_text(text: str, *, limit: int = _TELEGRAM_MAX_CHARS) -> str:
+    """กันข้อความเกิน Telegram hard limit (4096 ตัวอักษร) ทำให้ sendMessage ล้มเหลวทั้งข้อความ."""
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + "\n… (ตัดข้อความเพราะยาวเกินไป)"
+
+
 def _format_surge_line(signal: dict, index: int) -> str:
     """แปลง surge signal dict เป็นข้อความบรรทัดเดียว."""
     grade = (signal.get("surge_grade") or {}).get("grade", "-")
@@ -479,12 +507,15 @@ async def _handle_bot_command(command: str, chat_id: str) -> None:
                 return
             await telegram.send_message(_format_analysis(result), chat_id=chat_id)
 
-        elif cmd in ("/surge", "/surges", "/ziing", "/ซิ่ง"):
-            signals = get_surge_signal_dicts(limit=10)
+        elif cmd_word in ("/surge", "/surges", "/ziing", "/ซิ่ง"):
+            count, want_fresh = _parse_alert_arg(arg, default=settings.surge_alert_limit)
+            if want_fresh:
+                await telegram.send_message("🔄 กำลังสแกนราคาสดล่าสุด... รอสักครู่", chat_id=chat_id)
+            signals = get_surge_signal_dicts(limit=count, fresh=want_fresh)
             if not signals:
                 await telegram.send_message("🔄 ยังไม่มีข้อมูล กำลังสแกน+คัดกรองด้วย AI... รอ 1-2 นาที", chat_id=chat_id)
-                signals = await _run_scan_and_get("surge", limit=10)
-            lines = ["🚀 หุ้นซิ่ง Top 10 (คัดกรองโดย AI)\n"]
+                signals = await _run_scan_and_get("surge", limit=count)
+            lines = [f"🚀 หุ้นซิ่ง Top {len(signals) or count} (คัดกรองโดย AI)\n"]
             if signals:
                 for i, s in enumerate(signals, 1):
                     lines.append(_format_surge_line(s, i))
@@ -493,14 +524,16 @@ async def _handle_bot_command(command: str, chat_id: str) -> None:
                         lines.append(f"   💡 {reason}")
             else:
                 lines.append("— ยังไม่พบหุ้นที่เข้าเกณฑ์ —")
-            await telegram.send_message("\n".join(lines), chat_id=chat_id)
+            lines.append("\nพิมพ์ /surge 30 เพื่อดูมากขึ้น หรือ /surge live เพื่อสแกนราคาสด")
+            await telegram.send_message(_clip_telegram_text("\n".join(lines)), chat_id=chat_id)
 
-        elif cmd in ("/longterm", "/long", "/lt", "/ระยะยาว"):
-            picks = get_longterm_signal_dicts(limit=10)
+        elif cmd_word in ("/longterm", "/long", "/lt", "/ระยะยาว"):
+            count, _want_fresh = _parse_alert_arg(arg, default=settings.longterm_alert_limit)
+            picks = get_longterm_signal_dicts(limit=count)
             if not picks:
                 await telegram.send_message("🔄 ยังไม่มีข้อมูล กำลังสแกนหุ้น... รอสักครู่", chat_id=chat_id)
-                picks = await _run_scan_and_get("longterm", limit=10)
-            lines = ["📈 หุ้นน่าสนใจระยะยาว Top 10\n"]
+                picks = await _run_scan_and_get("longterm", limit=count)
+            lines = [f"📈 หุ้นน่าสนใจระยะยาว Top {len(picks) or count}\n"]
             if picks:
                 for i, p in enumerate(picks, 1):
                     lines.append(
@@ -511,7 +544,8 @@ async def _handle_bot_command(command: str, chat_id: str) -> None:
                         lines.append(f"   • {reasons[0]}")
             else:
                 lines.append("— ยังไม่พบหุ้นที่เข้าเกณฑ์ —")
-            await telegram.send_message("\n".join(lines), chat_id=chat_id)
+            lines.append("\nพิมพ์ /longterm 30 เพื่อดูมากขึ้น")
+            await telegram.send_message(_clip_telegram_text("\n".join(lines)), chat_id=chat_id)
 
         elif cmd in ("/scan", "/สแกน", "/update"):
             await telegram.send_message("🔄 เริ่ม scan หุ้น... รอประมาณ 1-2 นาที", chat_id=chat_id)
@@ -541,8 +575,10 @@ async def _handle_bot_command(command: str, chat_id: str) -> None:
                 "/analyze SYMBOL — วิเคราะห์หุ้นรายตัว (จุดเข้า/จุดขาย/ข่าว/AI)\n"
                 "   เช่น /analyze AAPL หรือ /a TSLA\n"
                 "/scan — สแกนหุ้นใหม่ (ใช้ครั้งแรกหรือเมื่อข้อมูลหมดอายุ)\n"
-                "/surge — หุ้นซิ่ง Top 10\n"
-                "/longterm — หุ้นน่าสนใจระยะยาว Top 10\n"
+                f"/surge — หุ้นซิ่ง Top {settings.surge_alert_limit} (คัดกรองโดย AI)\n"
+                "   /surge 30 — ขอเพิ่มจำนวน (5-30) · /surge live — สแกนราคาสด\n"
+                f"/longterm — หุ้นน่าสนใจระยะยาว Top {settings.longterm_alert_limit}\n"
+                "   /longterm 30 — ขอเพิ่มจำนวน (5-30)\n"
                 "/digest — สรุปรายวัน (ซิ่ง + ระยะยาว)\n"
                 "/help — ข้อความนี้"
             )

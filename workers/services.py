@@ -364,7 +364,9 @@ def execute_scan_job(
 
             if kind == "surge":
                 models = _surge_signal_models(force=True)
-                selected = _run_async_scan(_gemini_screen_surge(models, limit=10))
+                selected = _run_async_scan(
+                    _gemini_screen_surge(models, limit=settings.surge_alert_limit)
+                )
                 saved_ids = save_signals(
                     selected, settings.database_url, scan_run_id=scan_run_id
                 )

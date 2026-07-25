@@ -103,6 +103,8 @@ class Settings:
     scan_workers: int
     ai_candidate_limit: int
     longterm_scan_limit: int
+    longterm_alert_limit: int
+    surge_alert_limit: int
     surge_extra_symbols: list[str]
     surge_universe_mode: str
     surge_universe_limit: int
@@ -156,7 +158,9 @@ def get_settings() -> Settings:
         scan_universe_limit=_env_int("SCAN_UNIVERSE_LIMIT", default=0, minimum=0, maximum=10000),
         scan_workers=_env_int("SCAN_WORKERS", default=12, minimum=1, maximum=48),
         ai_candidate_limit=_env_int("AI_CANDIDATE_LIMIT", default=50, minimum=5, maximum=500),
-        longterm_scan_limit=_env_int("LONGTERM_SCAN_LIMIT", default=80, minimum=5, maximum=500),
+        longterm_scan_limit=_env_int("LONGTERM_SCAN_LIMIT", default=160, minimum=5, maximum=500),
+        longterm_alert_limit=_env_int("LONGTERM_ALERT_LIMIT", default=20, minimum=5, maximum=50),
+        surge_alert_limit=_env_int("SURGE_ALERT_LIMIT", default=20, minimum=5, maximum=50),
         surge_extra_symbols=_env_csv("SURGE_EXTRA_SYMBOLS"),
         surge_universe_mode=os.getenv("SURGE_UNIVERSE_MODE", "all").lower(),
         surge_universe_limit=_env_int("SURGE_UNIVERSE_LIMIT", default=0, minimum=0, maximum=10000),
