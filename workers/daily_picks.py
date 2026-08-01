@@ -33,6 +33,10 @@ _PICKS_TTL_SECONDS = 45 * 60.0  # 45 นาที — ข้อมูล daily �
 _AI_CANDIDATE_LIMIT = 12
 # จำนวนหุ้นที่ผ่านการคัดหยาบไปดึงประวัติราคา 1 ปี (ขั้นที่แพงที่สุด)
 _PRESCREEN_LIMIT = 25
+# ประวัติที่ดึง (วันทำการ) — 420 พอสำหรับ SMA200 + ช่วง 52 สัปดาห์
+_HISTORY_DAYS = 420
+# จำนวนแท่งที่ส่งให้หน้าเว็บวาดกราฟราคา+วอลุ่ม
+_CHART_DAYS = 60
 _SPARK_TICKS = "▁▂▃▄▅▆▇█"
 
 
@@ -173,8 +177,9 @@ def _enrich_candidate(item: tuple[Stock, MarketSnapshot]) -> dict | None:
     history = get_history_provider(use_live_data=settings.use_live_data)
     snapshot = _with_volume_baseline(snapshot) if settings.use_live_data else snapshot
     try:
-        closes = history.get_closes(stock.symbol)
-        # คำนวณ metrics จาก closes ที่ดึงมาแล้ว — เรียก get_metrics() จะยิง HTTP ซ้ำอีกรอบ
+        # ดึงชุดเดียวแล้วใช้ทั้งคำนวณ metrics และวาดกราฟ — แยกเรียกจะยิง HTTP ซ้ำต่อ symbol
+        bars = history.get_bars(stock.symbol, days=_HISTORY_DAYS)
+        closes = [bar["close"] for bar in bars]
         metrics = _metrics_from_closes(stock.symbol, closes, latest_price=snapshot.latest_price)
     except Exception as exc:
         logger.debug("daily picks: skip %s (%s)", stock.symbol, exc)
@@ -186,6 +191,7 @@ def _enrich_candidate(item: tuple[Stock, MarketSnapshot]) -> dict | None:
         "features": features,
         "rule_score": _rule_score(features),
         "closes": closes,
+        "bars": bars[-_CHART_DAYS:],
         "snapshot": snapshot,
     }
 
@@ -311,6 +317,8 @@ def _to_pick(candidate: dict, verdict: dict | None) -> dict:
         "return_3m_percent": features["return_3m_percent"],
         "volatility_percent": features["volatility_percent"],
         "closes_20d": features["closes_20d"],
+        # แท่งรายวันสำหรับกราฟบนเว็บ (ราคา + วอลุ่มใช้แกนเวลาเดียวกัน)
+        "bars": candidate.get("bars") or [],
         "sparkline": sparkline(candidate["closes"]),
         "news": [
             {"title": item.title, "url": item.url, "source": item.source}

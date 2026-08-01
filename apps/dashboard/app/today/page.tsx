@@ -3,16 +3,16 @@
 import {
   AlertTriangle,
   Bot,
-  Flame,
   Info,
   Newspaper,
   RefreshCw,
-  Sparkles,
-  TrendingUp
+  TrendingUp,
+  Zap
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
-import { Sparkline } from "../../components/Sparkline";
+import { GaugeRing } from "../../components/GaugeRing";
+import { PriceVolumeChart, type Bar } from "../../components/PriceVolumeChart";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 
@@ -44,6 +44,7 @@ type DailyPick = {
   return_3m_percent: number;
   volatility_percent: number;
   closes_20d: number[];
+  bars?: Bar[];
   news: PickNews[];
 };
 
@@ -57,19 +58,12 @@ type PicksResponse = {
   stale?: boolean;
 };
 
-const VERDICT_TONE: Record<string, { text: string; ring: string; bg: string }> = {
-  "น่าสนใจมาก": { text: "text-gain", ring: "ring-gain/40", bg: "bg-gain/10" },
-  "น่าสนใจ": { text: "text-accent-cyan", ring: "ring-accent-cyan/40", bg: "bg-accent-cyan/10" },
-  "เฝ้าดู": { text: "text-amber", ring: "ring-amber/40", bg: "bg-amber/10" },
-  "ยังไม่น่าเข้า": { text: "text-ink-muted", ring: "ring-bg-line", bg: "bg-bg-raised" }
+const VERDICT_TONE: Record<string, string> = {
+  "น่าสนใจมาก": "bg-gain/10 text-gain ring-gain/30",
+  "น่าสนใจ": "bg-accent-cyan/10 text-accent-cyan ring-accent-cyan/30",
+  "เฝ้าดู": "bg-amber/10 text-amber ring-amber/30",
+  "ยังไม่น่าเข้า": "bg-bg-raised text-ink-muted ring-bg-line"
 };
-
-function probabilityColor(value: number): string {
-  if (value >= 75) return "bg-gain";
-  if (value >= 55) return "bg-accent-cyan";
-  if (value >= 35) return "bg-amber";
-  return "bg-ink-subtle";
-}
 
 function formatTime(iso: string): string {
   if (!iso) return "-";
@@ -79,10 +73,37 @@ function formatTime(iso: string): string {
     : date.toLocaleString("th-TH", { dateStyle: "short", timeStyle: "short" });
 }
 
+function verdictClass(verdict: string): string {
+  return VERDICT_TONE[verdict] ?? VERDICT_TONE["เฝ้าดู"];
+}
+
+/** ตัวเลขหนึ่งช่องในแถบสถิติใต้กราฟ */
+function Metric({
+  label,
+  value,
+  tone
+}: {
+  label: string;
+  value: string;
+  tone?: "gain" | "loss" | "plain";
+}) {
+  const color =
+    tone === "gain" ? "text-gain" : tone === "loss" ? "text-loss" : "text-ink";
+  return (
+    <div className="rounded-xl border border-bg-line bg-bg-base/40 px-3 py-2">
+      <div className="text-[10px] uppercase tracking-wider text-ink-subtle">{label}</div>
+      <div className={`mt-0.5 font-mono text-sm font-semibold tabular-nums ${color}`}>
+        {value}
+      </div>
+    </div>
+  );
+}
+
 export default function TodayPage() {
   const [data, setData] = useState<PicksResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [selected, setSelected] = useState<string>("");
 
   async function load(refresh = false) {
     setError("");
@@ -99,7 +120,9 @@ export default function TodayPage() {
             : "เรียกข้อมูลหุ้นน่าสนใจวันนี้ไม่สำเร็จ"
         );
       }
-      setData((await response.json()) as PicksResponse);
+      const payload = (await response.json()) as PicksResponse;
+      setData(payload);
+      setSelected((current) => current || payload.picks[0]?.symbol || "");
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "โหลดไม่สำเร็จ");
     } finally {
@@ -112,38 +135,44 @@ export default function TodayPage() {
   }, []);
 
   const picks = data?.picks ?? [];
+  const active = useMemo(
+    () => picks.find((pick) => pick.symbol === selected) ?? picks[0],
+    [picks, selected]
+  );
   const aiPowered = data?.analysis_source === "gemini";
+  const activeRank = active ? picks.findIndex((p) => p.symbol === active.symbol) + 1 : 0;
 
   return (
-    <main className="relative z-10 mx-auto max-w-[1440px] px-4 py-5 sm:px-6 lg:px-8 lg:py-7">
-      <header className="panel mb-5 flex flex-col gap-3 px-4 py-4 sm:px-5 lg:flex-row lg:items-center lg:justify-between">
-        <div className="flex items-center gap-3">
-          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-amber/10 ring-1 ring-amber/25">
-            <Sparkles className="h-5 w-5 text-amber" />
-          </div>
-          <div>
-            <h1 className="text-lg font-semibold text-ink sm:text-xl">หุ้นน่าสนใจวันนี้</h1>
-            <p className="text-xs text-ink-muted">
-              คัดจากโครงสร้างราคา + วอลุ่มผิดปกติ แล้วให้ AI อ่านกราฟและข่าวจัดอันดับโอกาสวิ่งแรงระยะสั้น
-            </p>
-          </div>
+    <main className="ambient relative mx-auto max-w-[1440px] px-4 py-6 sm:px-6 lg:px-8">
+      {/* ── หัวเรื่อง ── */}
+      <header className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-ink-subtle">
+            AI Stock Radar
+          </p>
+          <h1 className="mt-1 text-3xl font-semibold tracking-tight text-ink sm:text-4xl">
+            หุ้นน่าสนใจวันนี้
+          </h1>
+          <p className="mt-1.5 max-w-xl text-sm leading-6 text-ink-muted">
+            คัดจากโครงสร้างราคาและวอลุ่มผิดปกติ แล้วให้ AI อ่านกราฟกับข่าวจัดอันดับโอกาสวิ่งแรงระยะสั้น
+          </p>
         </div>
         <div className="flex items-center gap-2">
           <span
-            className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] font-medium ring-1 ${
+            className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11px] font-medium ring-1 ${
               aiPowered
                 ? "bg-gain/10 text-gain ring-gain/30"
                 : "bg-bg-raised text-ink-muted ring-bg-line"
             }`}
           >
             <Bot className="h-3.5 w-3.5" />
-            {aiPowered ? "จัดอันดับโดย Gemini" : "จัดอันดับด้วยกฎ (AI ไม่พร้อมใช้)"}
+            {aiPowered ? "จัดอันดับโดย Gemini" : "จัดอันดับด้วยกฎเทคนิค"}
           </span>
           <button
             type="button"
             onClick={() => void load(true)}
             disabled={loading}
-            className="focus-ring inline-flex h-9 cursor-pointer items-center gap-2 rounded-lg border border-bg-line bg-bg-raised px-4 text-sm font-medium text-ink-muted transition hover:text-ink disabled:opacity-60"
+            className="focus-ring inline-flex h-9 cursor-pointer items-center gap-2 rounded-full border border-bg-line bg-bg-surface px-4 text-sm font-medium text-ink-muted transition-colors duration-200 hover:text-ink disabled:opacity-60"
           >
             <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
             รีเฟรช
@@ -151,187 +180,242 @@ export default function TodayPage() {
         </div>
       </header>
 
-      <div className="mb-5 flex items-start gap-3 rounded-xl border border-accent-cyan/30 bg-accent-cyan/10 px-4 py-3 text-sm text-accent-cyan">
-        <Info className="mt-0.5 h-4 w-4 shrink-0" />
-        <p className="leading-6">
-          {data?.disclaimer ??
-            "ประเมินจากราคาปิดรายวัน (EOD) + ข่าวล่าสุด เป็นโซนอ้างอิงเชิงสถิติ ไม่ใช่การทำนายราคาระหว่างวัน และไม่ใช่คำแนะนำการลงทุน"}
-        </p>
-      </div>
-
       {error ? (
-        <div className="mb-5 flex items-center gap-2 rounded-xl border border-loss/30 bg-loss/10 px-4 py-3 text-sm text-loss">
-          <AlertTriangle className="h-4 w-4" />
+        <div className="mb-5 flex items-center gap-2 rounded-2xl border border-loss/30 bg-loss/10 px-4 py-3 text-sm text-loss">
+          <AlertTriangle className="h-4 w-4 shrink-0" />
           {error}
         </div>
       ) : null}
 
-      {data ? (
-        <p className="mb-4 text-xs text-ink-subtle">
-          คัดจาก {data.universe_count} ตัว · อัปเดต {formatTime(data.generated_at)}
-          {data.stale ? " · กำลังคำนวณรอบใหม่เบื้องหลัง" : ""}
-        </p>
-      ) : null}
-
       {loading && picks.length === 0 ? (
-        <div className="panel px-4 py-12 text-center text-sm text-ink-subtle">
+        <div className="glass px-6 py-16 text-center text-sm text-ink-muted">
           กำลังสแกนตลาดและวิเคราะห์กราฟ... รอบแรกใช้เวลาราว 1 นาที
         </div>
-      ) : picks.length === 0 && !error ? (
-        <div className="panel px-4 py-12 text-center text-sm text-ink-subtle">
-          ยังไม่พบหุ้นที่เข้าเกณฑ์
-        </div>
+      ) : picks.length === 0 ? (
+        !error ? (
+          <div className="glass px-6 py-16 text-center text-sm text-ink-muted">
+            ยังไม่พบหุ้นที่เข้าเกณฑ์
+          </div>
+        ) : null
       ) : (
-        <section className="grid gap-4 lg:grid-cols-2">
-          {picks.map((pick, index) => {
-            const tone = VERDICT_TONE[pick.verdict] ?? VERDICT_TONE["เฝ้าดู"];
-            const up = pick.change_percent >= 0;
-            return (
-              <article key={pick.symbol} className="panel flex flex-col gap-3 px-4 py-4">
-                <div className="flex items-start justify-between gap-3">
+        <>
+          {/* ── สปอตไลต์: หุ้นที่เลือกอยู่ ── */}
+          {active ? (
+            <section className="layer-stack glass mb-8 p-5 sm:p-6 lg:p-7">
+              <div className="grid gap-6 lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)]">
+                {/* ซ้าย: อันดับ + วงแหวนโอกาส + เหตุผล */}
+                <div className="flex flex-col gap-4">
                   <div className="flex items-start gap-3">
-                    <span className="mt-0.5 flex h-7 w-7 items-center justify-center rounded-lg bg-bg-raised text-xs font-semibold text-ink-subtle">
-                      {index + 1}
+                    <span className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-bg-raised text-sm font-semibold text-ink-muted">
+                      {activeRank}
                     </span>
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="font-mono text-base font-semibold text-ink">
-                          {pick.symbol}
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-mono text-3xl font-semibold leading-none tracking-tight text-ink">
+                          {active.symbol}
                         </span>
                         <span
-                          className={`inline-flex items-center rounded-lg px-2 py-0.5 text-[11px] font-bold ring-1 ${tone.ring} ${tone.text} ${tone.bg}`}
+                          className={`inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-semibold ring-1 ${verdictClass(
+                            active.verdict
+                          )}`}
                         >
-                          {pick.verdict}
+                          {active.verdict}
                         </span>
                       </div>
-                      <div className="max-w-[220px] truncate text-[11px] text-ink-subtle">
-                        {pick.name}
-                        {pick.sector ? ` · ${pick.sector}` : ""}
+                      <p className="mt-1 truncate text-xs text-ink-subtle">
+                        {active.name}
+                        {active.sector ? ` · ${active.sector}` : ""}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-5">
+                    <GaugeRing value={active.pop_probability} size={140} label="โอกาสวิ่งแรง" />
+                    <div className="min-w-0 space-y-1">
+                      <div className="font-mono text-2xl font-semibold tabular-nums text-ink">
+                        ${active.price.toFixed(2)}
+                      </div>
+                      <div
+                        className={`font-mono text-sm font-medium tabular-nums ${
+                          active.change_percent >= 0 ? "text-gain" : "text-loss"
+                        }`}
+                      >
+                        {active.change_percent >= 0 ? "+" : ""}
+                        {active.change_percent.toFixed(2)}%
+                      </div>
+                      <p className="text-[11px] leading-5 text-ink-subtle">
+                        ประเมินกรอบ 1-5 วันทำการ
+                        <br />
+                        จากราคาปิดรายวัน
+                      </p>
+                    </div>
+                  </div>
+
+                  <p className="text-sm leading-6 text-ink-muted">{active.reason}</p>
+
+                  <div className="space-y-2">
+                    <div className="flex items-start gap-2 rounded-xl border border-bg-line bg-bg-base/40 px-3 py-2">
+                      <TrendingUp className="mt-0.5 h-3.5 w-3.5 shrink-0 text-gain" />
+                      <div>
+                        <div className="text-[10px] uppercase tracking-wider text-ink-subtle">
+                          ตัวกระตุ้น
+                        </div>
+                        <p className="text-xs leading-5 text-ink-muted">{active.catalyst}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-start gap-2 rounded-xl border border-loss/20 bg-loss/[0.06] px-3 py-2">
+                      <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-loss" />
+                      <div>
+                        <div className="text-[10px] uppercase tracking-wider text-ink-subtle">
+                          ความเสี่ยง
+                        </div>
+                        <p className="text-xs leading-5 text-ink-muted">{active.risk}</p>
                       </div>
                     </div>
                   </div>
-                  <div className="text-right">
-                    <div className="font-mono text-sm font-semibold text-ink">
-                      ${pick.price.toFixed(2)}
-                    </div>
-                    <div
-                      className={`font-mono text-xs font-medium ${up ? "text-gain" : "text-loss"}`}
-                    >
-                      {up ? "+" : ""}
-                      {pick.change_percent.toFixed(2)}%
-                    </div>
-                  </div>
                 </div>
 
-                {/* โอกาสวิ่งแรง */}
-                <div>
-                  <div className="mb-1 flex items-center justify-between text-[11px] text-ink-subtle">
-                    <span className="inline-flex items-center gap-1">
-                      <Flame className="h-3.5 w-3.5" />
-                      โอกาสวิ่งแรงระยะสั้น (1-5 วันทำการ)
-                    </span>
-                    <span className="font-mono font-semibold text-ink">
-                      {Math.round(pick.pop_probability)}%
-                    </span>
+                {/* ขวา: กราฟราคา + วอลุ่ม แล้วต่อด้วยตัวเลขสำคัญ */}
+                <div className="flex flex-col gap-4">
+                  <div className="rounded-2xl border border-bg-line bg-bg-base/40 p-4">
+                    <div className="mb-2 flex items-baseline justify-between">
+                      <h2 className="text-xs font-medium text-ink-muted">
+                        ราคาปิด 60 วันทำการล่าสุด
+                      </h2>
+                      <span className="text-[10px] text-ink-subtle">
+                        แท่งด้านล่างคือวอลุ่มวันเดียวกัน
+                      </span>
+                    </div>
+                    <PriceVolumeChart bars={active.bars ?? []} height={200} />
                   </div>
-                  <div className="h-2 overflow-hidden rounded-full bg-bg-raised">
-                    <div
-                      className={`h-full rounded-full transition-all ${probabilityColor(
-                        pick.pop_probability
-                      )}`}
-                      style={{ width: `${Math.max(2, Math.min(100, pick.pop_probability))}%` }}
+
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    <Metric
+                      label="วอลุ่มเทียบเฉลี่ย"
+                      value={`${active.relative_volume.toFixed(2)}x`}
+                      tone={active.relative_volume >= 1.5 ? "gain" : "plain"}
+                    />
+                    <Metric label="RSI (14)" value={active.rsi14?.toFixed(0) ?? "-"} />
+                    <Metric
+                      label="ต่อแนวต้านเดิม"
+                      value={`${active.breakout_gap_percent >= 0 ? "+" : ""}${active.breakout_gap_percent.toFixed(1)}%`}
+                      tone={active.breakout_gap_percent >= 0 ? "gain" : "plain"}
+                    />
+                    <Metric
+                      label="ผลตอบแทน 3 เดือน"
+                      value={`${active.return_3m_percent >= 0 ? "+" : ""}${active.return_3m_percent.toFixed(1)}%`}
+                      tone={active.return_3m_percent >= 0 ? "gain" : "loss"}
                     />
                   </div>
+
+                  {active.news.length > 0 ? (
+                    <div className="rounded-2xl border border-bg-line bg-bg-base/40 p-4">
+                      <div className="mb-2 flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-ink-subtle">
+                        <Newspaper className="h-3 w-3" />
+                        ข่าวที่ใช้ประกอบการประเมิน
+                      </div>
+                      <ul className="space-y-1.5">
+                        {active.news.slice(0, 3).map((item) => (
+                          <li key={item.title} className="text-xs leading-5 text-ink-muted">
+                            {item.url ? (
+                              <a
+                                href={item.url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="cursor-pointer transition-colors duration-200 hover:text-accent-cyan hover:underline"
+                              >
+                                {item.title}
+                              </a>
+                            ) : (
+                              item.title
+                            )}
+                            {item.source ? (
+                              <span className="text-ink-subtle"> ({item.source})</span>
+                            ) : null}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
                 </div>
+              </div>
+            </section>
+          ) : null}
 
-                <div className="flex items-center gap-3">
-                  <Sparkline
-                    points={pick.closes_20d}
-                    width={120}
-                    height={36}
-                    className="shrink-0"
-                  />
-                  <dl className="grid flex-1 grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
-                    <div className="flex justify-between">
-                      <dt className="text-ink-subtle">วอลุ่ม</dt>
-                      <dd className="font-mono text-ink">{pick.relative_volume.toFixed(2)}x</dd>
-                    </div>
-                    <div className="flex justify-between">
-                      <dt className="text-ink-subtle">RSI</dt>
-                      <dd className="font-mono text-ink">{pick.rsi14?.toFixed(0) ?? "-"}</dd>
-                    </div>
-                    <div className="flex justify-between">
-                      <dt className="text-ink-subtle">ต่อแนวต้าน</dt>
-                      <dd
-                        className={`font-mono ${
-                          pick.breakout_gap_percent >= 0 ? "text-gain" : "text-ink"
-                        }`}
-                      >
-                        {pick.breakout_gap_percent >= 0 ? "+" : ""}
-                        {pick.breakout_gap_percent.toFixed(1)}%
-                      </dd>
-                    </div>
-                    <div className="flex justify-between">
-                      <dt className="text-ink-subtle">MA200</dt>
-                      <dd className={pick.above_sma200 ? "text-gain" : "text-loss"}>
-                        {pick.above_sma200 ? "เหนือ" : "ใต้"}
-                      </dd>
-                    </div>
-                  </dl>
-                </div>
+          {/* ── แถวอันดับ: กดเพื่อสลับสปอตไลต์ ── */}
+          <section>
+            <div className="mb-3 flex items-baseline justify-between">
+              <h2 className="text-sm font-semibold text-ink">อันดับทั้งหมด</h2>
+              <p className="text-[11px] text-ink-subtle">
+                คัดจาก {data?.universe_count ?? 0} ตัว · อัปเดต {formatTime(data?.generated_at ?? "")}
+                {data?.stale ? " · กำลังคำนวณรอบใหม่" : ""}
+              </p>
+            </div>
 
-                <p className="text-sm leading-6 text-ink-muted">{pick.reason}</p>
+            <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+              {picks.map((pick, index) => {
+                const isActive = active?.symbol === pick.symbol;
+                return (
+                  <li key={pick.symbol}>
+                    <button
+                      type="button"
+                      onClick={() => setSelected(pick.symbol)}
+                      aria-pressed={isActive}
+                      className={`focus-ring glass flex w-full cursor-pointer items-center gap-3 p-3 text-left transition-shadow duration-200 hover:shadow-lift ${
+                        isActive ? "ring-2 ring-gain/40" : ""
+                      }`}
+                    >
+                      <span className="w-5 shrink-0 text-center text-xs font-semibold text-ink-subtle">
+                        {index + 1}
+                      </span>
+                      <GaugeRing
+                        value={pick.pop_probability}
+                        size={54}
+                        strokeWidth={5}
+                        showValue={false}
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="flex items-baseline justify-between gap-2">
+                          <span className="font-mono text-sm font-semibold text-ink">
+                            {pick.symbol}
+                          </span>
+                          <span className="font-mono text-sm font-semibold tabular-nums text-ink">
+                            {Math.round(pick.pop_probability)}%
+                          </span>
+                        </span>
+                        <span className="mt-0.5 flex items-center justify-between gap-2">
+                          <span className="truncate text-[11px] text-ink-subtle">
+                            {pick.verdict}
+                          </span>
+                          <span
+                            className={`font-mono text-[11px] tabular-nums ${
+                              pick.change_percent >= 0 ? "text-gain" : "text-loss"
+                            }`}
+                          >
+                            {pick.change_percent >= 0 ? "+" : ""}
+                            {pick.change_percent.toFixed(1)}%
+                          </span>
+                        </span>
+                        <span className="mt-1 flex items-center gap-1 text-[10px] text-ink-subtle">
+                          <Zap className="h-3 w-3" />
+                          วอลุ่ม {pick.relative_volume.toFixed(1)}x
+                        </span>
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
 
-                <div className="grid gap-2 sm:grid-cols-2">
-                  <div className="rounded-lg border border-bg-line bg-bg-base/40 px-3 py-2">
-                    <div className="mb-0.5 flex items-center gap-1 text-[10px] uppercase tracking-wider text-ink-subtle">
-                      <TrendingUp className="h-3 w-3" />
-                      ตัวกระตุ้น
-                    </div>
-                    <p className="text-xs leading-5 text-ink-muted">{pick.catalyst}</p>
-                  </div>
-                  <div className="rounded-lg border border-loss/20 bg-loss/[0.06] px-3 py-2">
-                    <div className="mb-0.5 flex items-center gap-1 text-[10px] uppercase tracking-wider text-loss/80">
-                      <AlertTriangle className="h-3 w-3" />
-                      ความเสี่ยง
-                    </div>
-                    <p className="text-xs leading-5 text-ink-muted">{pick.risk}</p>
-                  </div>
-                </div>
-
-                {pick.news.length > 0 ? (
-                  <div className="border-t border-bg-line pt-2">
-                    <div className="mb-1 flex items-center gap-1 text-[10px] uppercase tracking-wider text-ink-subtle">
-                      <Newspaper className="h-3 w-3" />
-                      ข่าวที่ใช้ประกอบ
-                    </div>
-                    <ul className="space-y-1">
-                      {pick.news.slice(0, 3).map((item) => (
-                        <li key={item.title} className="text-xs leading-5 text-ink-muted">
-                          {item.url ? (
-                            <a
-                              href={item.url}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="hover:text-accent-cyan hover:underline"
-                            >
-                              {item.title}
-                            </a>
-                          ) : (
-                            item.title
-                          )}
-                          {item.source ? (
-                            <span className="text-ink-subtle"> ({item.source})</span>
-                          ) : null}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                ) : null}
-              </article>
-            );
-          })}
-        </section>
+          <div className="mt-6 flex items-start gap-2.5 rounded-2xl border border-bg-line bg-bg-surface/60 px-4 py-3 text-xs leading-6 text-ink-muted">
+            <Info className="mt-1 h-3.5 w-3.5 shrink-0 text-ink-subtle" />
+            <p>
+              {data?.disclaimer ??
+                "ประเมินจากราคาปิดรายวัน (EOD) + ข่าวล่าสุด เป็นโซนอ้างอิงเชิงสถิติ ไม่ใช่การทำนายราคาระหว่างวัน และไม่ใช่คำแนะนำการลงทุน"}
+            </p>
+          </div>
+        </>
       )}
     </main>
   );

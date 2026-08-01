@@ -10,7 +10,7 @@ from urllib.request import Request, urlopen
 
 from workers.config import get_settings
 from workers.data_models import LongTermMetrics
-from workers.scanner.fetch_prices import fetch_nasdaq_json
+from workers.scanner.fetch_prices import _money, fetch_nasdaq_json
 
 _TRADING_DAYS_YEAR = 252
 _ANNUALIZE = _TRADING_DAYS_YEAR**0.5
@@ -30,6 +30,15 @@ class HistoryProvider:
     def get_closes(self, symbol: str) -> list[float]:
         """ราคาปิดรายวัน เรียงเก่า→ใหม่ (ใช้ทั้งคำนวณ metrics และวาด sparkline)."""
         raise NotImplementedError
+
+    def get_bars(self, symbol: str, days: int = 60) -> list[dict]:
+        """แท่งราคารายวัน {date, close, volume} เรียงเก่า→ใหม่ สำหรับวาดกราฟบนเว็บ.
+
+        ค่าเริ่มต้นคืนเฉพาะราคาปิด (volume = None) — provider ที่มีวอลุ่มให้
+        override เอง หน้าเว็บจะซ่อนแผงวอลุ่มเมื่อไม่มีข้อมูล
+        """
+        closes = self.get_closes(symbol)[-days:]
+        return [{"date": None, "close": close, "volume": None} for close in closes]
 
     def get_metrics(self, symbol: str) -> LongTermMetrics:
         return _metrics_from_closes(symbol, self.get_closes(symbol))
@@ -104,6 +113,41 @@ class YahooHistoryProvider(HistoryProvider):
         closes, latest = self._chart_closes(symbol)
         return _metrics_from_closes(symbol, closes, latest_price=latest)
 
+    def get_bars(self, symbol: str, days: int = 60) -> list[dict]:
+        # ขอช่วงให้พอกับจำนวนแท่งที่ต้องการ — ผู้เรียกใช้ชุดเดียวกันนี้คำนวณ SMA200/52w ด้วย
+        chart_range = "2y" if days > 150 else "6mo"
+        request = Request(
+            f"{self.chart_url}/{symbol}?{urlencode({'range': chart_range, 'interval': '1d'})}",
+            headers={"User-Agent": "stock-radar-ai/0.1"},
+        )
+        with urlopen(request, timeout=15) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        results = payload.get("chart", {}).get("result", [])
+        if not results:
+            raise ValueError(f"No Yahoo Finance history for {symbol}")
+        chart = results[0]
+        quote = chart.get("indicators", {}).get("quote", [{}])[0]
+        closes = quote.get("close") or []
+        volumes = quote.get("volume") or []
+        stamps = chart.get("timestamp") or []
+        bars = []
+        for index, close in enumerate(closes):
+            if close is None:
+                continue
+            stamp = stamps[index] if index < len(stamps) else None
+            bars.append(
+                {
+                    "date": (
+                        datetime.fromtimestamp(stamp, timezone.utc).strftime("%m/%d/%Y")
+                        if stamp
+                        else None
+                    ),
+                    "close": float(close),
+                    "volume": int(volumes[index]) if index < len(volumes) and volumes[index] else None,
+                }
+            )
+        return bars[-days:]
+
 
 class StooqHistoryProvider(HistoryProvider):
     daily_url = "https://stooq.com/q/d/l/"
@@ -128,27 +172,44 @@ class NasdaqHistoryProvider(HistoryProvider):
 
     historical_url = "https://api.nasdaq.com/api/quote/{symbol}/historical"
 
-    def get_closes(self, symbol: str) -> list[float]:
+    def _rows(self, symbol: str, lookback_days: int) -> list[dict]:
         today = datetime.now(timezone.utc).date()
         # ไล่ assetclass (stocks → etf) เพราะ ETF ตอบ data=null เมื่อใช้ชนิดผิด
         payload = fetch_nasdaq_json(
             self.historical_url.format(symbol=symbol.upper()),
             symbol,
             {
-                "fromdate": (today - timedelta(days=420)).isoformat(),
+                "fromdate": (today - timedelta(days=lookback_days)).isoformat(),
                 "todate": today.isoformat(),
                 "limit": 9999,
             },
             timeout=20,
         )
-
         rows = (((payload.get("data") or {}).get("tradesTable") or {}).get("rows")) or []
-        # Nasdaq เรียงใหม่→เก่า; _metrics_from_closes ต้องการเก่า→ใหม่ จึง reverse
+        # Nasdaq เรียงใหม่→เก่า; ผู้ใช้ต่อ (metrics/กราฟ) ต้องการเก่า→ใหม่
+        return list(reversed(rows))
+
+    def get_closes(self, symbol: str) -> list[float]:
         return [
-            float(row["close"].replace("$", "").replace(",", "").strip())
-            for row in reversed(rows)
+            _money(row["close"])
+            for row in self._rows(symbol, 420)
             if row.get("close")
         ]
+
+    def get_bars(self, symbol: str, days: int = 60) -> list[dict]:
+        bars = []
+        # days = จำนวนวันทำการ ต้องเผื่อเป็นวันปฏิทิน (~1.6 เท่า) ตอนขอจาก API
+        for row in self._rows(symbol, max(int(days * 1.6), 120)):
+            if not row.get("close"):
+                continue
+            bars.append(
+                {
+                    "date": row.get("date"),
+                    "close": _money(row["close"]),
+                    "volume": int(_money(row.get("volume") or 0)) or None,
+                }
+            )
+        return bars[-days:]
 
 
 class MockHistoryProvider(HistoryProvider):
@@ -188,6 +249,12 @@ class FallbackHistoryProvider(HistoryProvider):
             return self.primary.get_closes(symbol)
         except Exception:
             return self.fallback.get_closes(symbol)
+
+    def get_bars(self, symbol: str, days: int = 60) -> list[dict]:
+        try:
+            return self.primary.get_bars(symbol, days)
+        except Exception:
+            return self.fallback.get_bars(symbol, days)
 
     def get_metrics(self, symbol: str) -> LongTermMetrics:
         try:

@@ -40,7 +40,14 @@
   /* เงานุ่มหลายชั้น — บนพื้นมืดต้องเข้มกว่าจึงจะเห็น */
   --shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.4);
   --shadow-card: 0 2px 8px rgba(0, 0, 0, 0.35), 0 8px 24px rgba(0, 0, 0, 0.28);
-  --shadow-lift: 0 4px 12px rgba(0, 0, 0, 0.4), 0 12px 32px rgba(0, 0, 0, 0.32);
+  --shadow-lift: 0 8px 20px rgba(0, 0, 0, 0.45), 0 24px 56px rgba(0, 0, 0, 0.38);
+
+  /* กระจกฝ้าบนพื้นมืด: ฝ้าขาวบาง ๆ */
+  --glass-bg: 255 255 255;
+  --glass-opacity: 0.055;
+  --glass-border: 255 255 255;
+  --glass-border-opacity: 0.1;
+  --ambient-opacity: 0.16;
 }
 
 /* ── ธีมสว่าง ── */
@@ -67,7 +74,14 @@
 
   --shadow-soft: 0 1px 2px rgba(24, 24, 27, 0.06);
   --shadow-card: 0 1px 3px rgba(24, 24, 27, 0.06), 0 6px 20px rgba(24, 24, 27, 0.06);
-  --shadow-lift: 0 2px 6px rgba(24, 24, 27, 0.08), 0 12px 28px rgba(24, 24, 27, 0.1);
+  --shadow-lift: 0 6px 16px rgba(24, 24, 27, 0.1), 0 20px 44px rgba(24, 24, 27, 0.12);
+
+  /* ธีมสว่างต้องทึบกว่ามาก ไม่งั้นตัวหนังสือบนกระจกอ่านไม่ออก */
+  --glass-bg: 255 255 255;
+  --glass-opacity: 0.72;
+  --glass-border: 24 24 27;
+  --glass-border-opacity: 0.08;
+  --ambient-opacity: 0.12;
 }
 
 * {
@@ -115,6 +129,51 @@ textarea {
 }
 
 @layer components {
+  /* ── กระจกฝ้า ──
+     ต้องมีอะไรอยู่ข้างหลังให้เบลอ ไม่งั้นกระจกจะดูเหมือนการ์ดทึบธรรมดา
+     จึงมี .ambient เป็นฉากหลังคู่กัน ธีมสว่างต้องทึบกว่ามาก (70%) ไม่งั้นตัวหนังสืออ่านไม่ออก */
+  .glass {
+    @apply rounded-3xl border backdrop-blur-xl;
+    background: rgb(var(--glass-bg) / var(--glass-opacity));
+    border-color: rgb(var(--glass-border) / var(--glass-border-opacity));
+    box-shadow: var(--shadow-lift);
+  }
+  /* ชั้นรองหลังการ์ดหลัก — เยื้องออกเล็กน้อยให้เห็นว่ามีความลึกจริง ไม่ใช่แค่เงา */
+  .layer-stack {
+    position: relative;
+  }
+  .layer-stack::before {
+    content: "";
+    position: absolute;
+    inset: 10px -8px -10px 8px;
+    border-radius: 24px;
+    background: rgb(var(--glass-bg) / calc(var(--glass-opacity) * 0.45));
+    border: 1px solid rgb(var(--glass-border) / calc(var(--glass-border-opacity) * 0.6));
+    z-index: -1;
+  }
+  /* ฉากหลังนุ่ม ๆ ให้กระจกมีอะไรให้เบลอ */
+  .ambient::before,
+  .ambient::after {
+    content: "";
+    position: fixed;
+    width: 46rem;
+    height: 46rem;
+    border-radius: 999px;
+    filter: blur(90px);
+    pointer-events: none;
+    z-index: -2;
+  }
+  .ambient::before {
+    top: -18rem;
+    left: -12rem;
+    background: rgb(var(--gain) / var(--ambient-opacity));
+  }
+  .ambient::after {
+    top: -10rem;
+    right: -16rem;
+    background: rgb(var(--accent-violet) / var(--ambient-opacity));
+  }
+
   /* การ์ดหลัก: พื้นทึบ + ขอบบาง + เงานุ่ม (ไม่มี backdrop-blur ที่ทำให้ธีมสว่างขุ่น) */
   .panel {
     @apply rounded-2xl border border-bg-line bg-bg-surface shadow-card;
