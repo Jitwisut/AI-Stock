@@ -60,6 +60,41 @@ class MarketDataUnavailableError(RuntimeError):
     pass
 
 
+# Nasdaq แยก endpoint ตามชนิดสินทรัพย์: หุ้นสามัญใช้ assetclass=stocks ส่วน ETF
+# (VOO, SPY, QQQ) ต้องใช้ assetclass=etf — ถ้าใส่ผิดชนิด API จะตอบ HTTP 200
+# พร้อม data=null ไม่ใช่ error จึงต้องไล่ลองทีละชนิดแล้วดูว่ามี data ไหม
+_NASDAQ_ASSET_CLASSES = ("stocks", "etf")
+_NASDAQ_ASSET_CLASS_CACHE: dict[str, str] = {}
+
+
+def _nasdaq_asset_class_order(symbol: str) -> list[str]:
+    """ลำดับ assetclass ที่จะลอง — เอาชนิดที่เคยสำเร็จของ symbol นี้ขึ้นก่อน."""
+    cached = _NASDAQ_ASSET_CLASS_CACHE.get(symbol.upper())
+    if not cached:
+        return list(_NASDAQ_ASSET_CLASSES)
+    return [cached] + [item for item in _NASDAQ_ASSET_CLASSES if item != cached]
+
+
+def fetch_nasdaq_json(url: str, symbol: str, params: dict, *, timeout: int = 15) -> dict:
+    """ยิง Nasdaq public API โดยไล่ assetclass จนกว่าจะได้ payload ที่มี data.
+
+    คืน payload ล่าสุดถ้าไม่มีชนิดไหนสำเร็จ เพื่อให้ผู้เรียกโยน error ของตัวเอง
+    (เช่น "No Nasdaq daily history found for X") ตามเดิม.
+    """
+    payload: dict = {}
+    for asset_class in _nasdaq_asset_class_order(symbol):
+        request = Request(
+            f"{url}?{urlencode({**params, 'assetclass': asset_class})}",
+            headers=_BROWSER_HEADERS,
+        )
+        payload = json.loads(_http_get_with_retry(request, timeout=timeout).decode("utf-8"))
+        if payload.get("data"):
+            # จำเฉพาะชนิดที่สำเร็จ (ไม่ cache ความล้มเหลว เพราะอาจเป็นแค่ error ชั่วคราว)
+            _NASDAQ_ASSET_CLASS_CACHE[symbol.upper()] = asset_class
+            return payload
+    return payload
+
+
 class MarketDataProvider:
     name = "unknown"
 
@@ -415,13 +450,11 @@ class NasdaqQuoteMarketDataProvider(MarketDataProvider):
     info_url = "https://api.nasdaq.com/api/quote/{symbol}/info"
 
     def get_snapshot(self, symbol: str) -> MarketSnapshot:
-        params = urlencode({"assetclass": "stocks"})
-        request = Request(
-            f"{self.info_url.format(symbol=symbol.upper())}?{params}",
-            headers=_BROWSER_HEADERS,
+        payload = fetch_nasdaq_json(
+            self.info_url.format(symbol=symbol.upper()),
+            symbol,
+            {},
         )
-        with urlopen(request, timeout=15) as response:
-            payload = json.loads(response.read().decode("utf-8"))
 
         primary_data = ((payload.get("data") or {}).get("primaryData")) or {}
         return _nasdaq_quote_primary_data_to_market_snapshot(symbol, primary_data)
@@ -448,20 +481,15 @@ class NasdaqMarketDataProvider(MarketDataProvider):
 
     def get_snapshot(self, symbol: str) -> MarketSnapshot:
         today = datetime.now(timezone.utc).date()
-        params = urlencode(
+        payload = fetch_nasdaq_json(
+            self.historical_url.format(symbol=symbol.upper()),
+            symbol,
             {
-                "assetclass": "stocks",
                 "fromdate": (today - timedelta(days=60)).isoformat(),
                 "todate": today.isoformat(),
                 "limit": 40,
-            }
+            },
         )
-        request = Request(
-            f"{self.historical_url.format(symbol=symbol.upper())}?{params}",
-            headers=_BROWSER_HEADERS,
-        )
-        with urlopen(request, timeout=15) as response:
-            payload = json.loads(response.read().decode("utf-8"))
 
         rows = (((payload.get("data") or {}).get("tradesTable") or {}).get("rows")) or []
         # rows เรียงใหม่→เก่า (newest first); กรองเฉพาะแถวที่มีราคาปิดใช้ได้

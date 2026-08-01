@@ -10,6 +10,7 @@ from urllib.request import Request, urlopen
 
 from workers.config import get_settings
 from workers.data_models import LongTermMetrics
+from workers.scanner.fetch_prices import fetch_nasdaq_json
 
 _TRADING_DAYS_YEAR = 252
 _ANNUALIZE = _TRADING_DAYS_YEAR**0.5
@@ -119,20 +120,17 @@ class NasdaqHistoryProvider(HistoryProvider):
 
     def get_metrics(self, symbol: str) -> LongTermMetrics:
         today = datetime.now(timezone.utc).date()
-        params = urlencode(
+        # ไล่ assetclass (stocks → etf) เพราะ ETF ตอบ data=null เมื่อใช้ชนิดผิด
+        payload = fetch_nasdaq_json(
+            self.historical_url.format(symbol=symbol.upper()),
+            symbol,
             {
-                "assetclass": "stocks",
                 "fromdate": (today - timedelta(days=420)).isoformat(),
                 "todate": today.isoformat(),
                 "limit": 9999,
-            }
+            },
+            timeout=20,
         )
-        request = Request(
-            f"{self.historical_url.format(symbol=symbol.upper())}?{params}",
-            headers=_BROWSER_HEADERS,
-        )
-        with urlopen(request, timeout=20) as response:
-            payload = json.loads(response.read().decode("utf-8"))
 
         rows = (((payload.get("data") or {}).get("tradesTable") or {}).get("rows")) or []
         # Nasdaq เรียงใหม่→เก่า; _metrics_from_closes ต้องการเก่า→ใหม่ จึง reverse
