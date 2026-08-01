@@ -136,20 +136,19 @@ def _prescreen_score(snapshot: MarketSnapshot) -> float:
         if snapshot.previous_close > 0
         else 0.0
     )
-    rel_vol = (
-        snapshot.volume / snapshot.average_volume_20d
-        if snapshot.average_volume_20d > 0
-        else 1.0
-    )
     breakout_gap = (
         (snapshot.latest_price - snapshot.prior_high) / snapshot.prior_high * 100
         if snapshot.prior_high > 0
         else 0.0
     )
-    score = min(35.0, max(0.0, change) * 5)
-    score += min(30.0, max(0.0, rel_vol - 1) * 20)
+    # ไม่ให้คะแนนวอลุ่มในขั้นนี้: snapshot ที่ใช้มาจาก nasdaq_quote ซึ่งตั้ง
+    # average_volume_20d = วอลุ่มวันนี้ → relative volume = 1.00 ทุกตัว คิดไปก็ไม่มีผล
+    # วอลุ่มจริงเข้ามาตอน _with_volume_baseline ในขั้นที่สอง
+    score = min(60.0, max(0.0, change) * 8)
     if breakout_gap > -3:
         score += 20
+    if snapshot.latest_price > snapshot.previous_close:
+        score += 10
     return score
 
 

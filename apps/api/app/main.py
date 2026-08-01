@@ -855,25 +855,38 @@ async def _handle_free_question(telegram, chat_id: str, question: str) -> None:
         )
         return
 
+    # จับเฉพาะ token ที่ผู้ใช้พิมพ์เป็นตัวพิมพ์ใหญ่จริง ๆ — ถ้า .upper() ทั้งประโยคก่อน
+    # คำอังกฤษธรรมดา ("is", "good") จะกลายเป็น ticker ไปด้วย
     symbols = [
-        token
-        for token in _SYMBOL_IN_TEXT.findall(question.upper())
-        if token not in _NOT_SYMBOLS
+        token for token in _SYMBOL_IN_TEXT.findall(question) if token not in _NOT_SYMBOLS
     ][:3]
 
+    # ดึงแค่ราคา ไม่เรียก _run_analysis เพราะนั่นเรียก Gemini อีกรอบต่อหุ้นหนึ่งตัว
+    # (โควตา free tier มีแค่ 20 ครั้ง/วัน — คำถามเดียวจะกินไป 2-4 ครั้ง)
     context_lines = []
-    for symbol in symbols:
-        try:
-            result = await _run_analysis(symbol)
-            signal = result.get("signal") or {}
-            context_lines.append(
-                f"{symbol}: ราคา ${signal.get('latest_price', 0):.2f} "
-                f"({signal.get('premarket_gap_percent', 0):+.2f}%), "
-                f"vol {signal.get('relative_volume', 0):.1f}x, "
-                f"คะแนนเทคนิค {signal.get('score', 0):.0f}/100"
+    if symbols:
+        from workers.scanner.fetch_prices import get_market_data_provider
+
+        provider = get_market_data_provider(use_live_data=settings.use_live_data)
+        for symbol in symbols:
+            try:
+                snapshot = provider.get_snapshot(symbol)
+            except Exception:
+                continue
+            change = (
+                (snapshot.latest_price - snapshot.previous_close) / snapshot.previous_close * 100
+                if snapshot.previous_close > 0
+                else 0.0
             )
-        except Exception:
-            continue
+            rel_vol = (
+                snapshot.volume / snapshot.average_volume_20d
+                if snapshot.average_volume_20d > 0
+                else 1.0
+            )
+            context_lines.append(
+                f"{symbol}: ราคา ${snapshot.latest_price:.2f} ({change:+.2f}%), "
+                f"vol {rel_vol:.1f}x"
+            )
 
     await telegram.send_message("🤔 กำลังคิด...", chat_id=chat_id)
 
