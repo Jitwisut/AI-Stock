@@ -492,7 +492,7 @@ async def _run_scan_and_get(kind: str, limit: int = 10) -> list[dict]:
     return get_surge_signal_dicts(limit) if kind == "surge" else get_longterm_signal_dicts(limit)
 
 
-async def _handle_bot_command(command: str, chat_id: str) -> None:
+async def _handle_bot_command(command: str, chat_id: str, chat_type: str = "private") -> None:
     """ตอบกลับคำสั่งจากผู้ใช้ใน Telegram."""
     from workers.alerts.telegram import TelegramClient
     from workers.config import get_settings
@@ -510,8 +510,17 @@ async def _handle_bot_command(command: str, chat_id: str) -> None:
     # ในกลุ่ม Telegram ส่งคำสั่งมาเป็น "/surge@MyBot" — ต้องตัด @botname ทิ้งก่อน
     if "@" in cmd_word:
         cmd_word = cmd_word.split("@", 1)[0]
-    # พิมพ์ชื่อหุ้นเปล่า ๆ ("AAPL", "voo") ให้ถือว่าเป็นการขอวิเคราะห์รายตัว
-    if cmd_word and not cmd_word.startswith("/") and _looks_like_symbol_query(command):
+    # ในกลุ่ม: เงียบไว้ถ้าไม่ใช่คำสั่ง ไม่งั้นบอทจะตอบ "ไม่รู้จักคำสั่ง" ใส่บทสนทนาปกติ
+    if chat_type != "private" and not cmd_word.startswith("/"):
+        return
+    # พิมพ์ชื่อหุ้นเปล่า ๆ ("AAPL", "voo") ให้ถือว่าเป็นการขอวิเคราะห์รายตัว — เฉพาะแชทส่วนตัว
+    # เท่านั้น ไม่งั้นในกลุ่มคำพูดทั่วไปอย่าง "ok"/"test" จะกลายเป็นคำสั่งวิเคราะห์ทุกครั้ง
+    if (
+        chat_type == "private"
+        and cmd_word
+        and not cmd_word.startswith("/")
+        and _looks_like_symbol_query(command)
+    ):
         arg = command.strip()
         cmd_word = "/analyze"
     try:
@@ -651,7 +660,9 @@ async def telegram_webhook(update: dict) -> dict:
     # (การ scan ใช้เวลานาน บอทจะส่งข้อความกลับเองผ่าน chat_id เมื่อเสร็จ)
     import asyncio
 
-    asyncio.create_task(_handle_bot_command(text, chat_id))
+    asyncio.create_task(
+        _handle_bot_command(text, chat_id, str(chat.get("type") or "private"))
+    )
     return {"ok": True}
 
 
