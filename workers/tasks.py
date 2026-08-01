@@ -54,12 +54,24 @@ if celery_app:
             "schedule": crontab(hour=6, minute=30),
             "args": ("universe_refresh", False),
         },
+        # เตือนราคาตาม watchlist — ทุก 15 นาทีระหว่างตลาดสหรัฐเปิด (20:30-04:00 TH)
+        "price-alerts": {
+            "task": "workers.tasks.price_alerts",
+            "schedule": crontab(minute="*/15", hour="20-23,0-4"),
+        },
     }
 
 
 def daily_digest() -> dict:
     """สแกนหุ้นซิ่ง + หุ้นระยะยาว แล้วส่งสรุปเข้า Telegram."""
     return asyncio.run(send_daily_digest())
+
+
+def price_alerts() -> dict:
+    """เช็ค watchlist ของผู้ใช้บอทแล้วส่งเตือนตัวที่ถึงราคาเป้าหมาย."""
+    from workers.bot_features import send_price_alerts
+
+    return asyncio.run(send_price_alerts())
 
 
 def scan_and_alert() -> dict:
@@ -97,3 +109,4 @@ if celery_app:
     celery_app.task(name="workers.tasks.scan_and_alert")(scan_and_alert)
     celery_app.task(name="workers.tasks.run_scan_job")(run_scan_job)
     celery_app.task(name="workers.tasks.scheduled_scan")(scheduled_scan)
+    celery_app.task(name="workers.tasks.price_alerts")(price_alerts)

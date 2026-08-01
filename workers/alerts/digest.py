@@ -70,7 +70,7 @@ def build_daily_digest(surge_limit: int = 5, longterm_limit: int = 5) -> str:
 
 
 async def send_daily_digest() -> dict:
-    """สร้าง digest แล้วส่งเข้า Telegram."""
+    """สร้าง digest แล้วส่งเข้า Telegram — ทั้ง chat หลักและผู้ที่กด /subscribe."""
     settings = get_settings()
     message = build_daily_digest()
 
@@ -78,8 +78,31 @@ async def send_daily_digest() -> dict:
     if not telegram.is_configured:
         return {"status": "not_configured", "sent": False, "message": message}
 
-    try:
-        sent = await telegram.send_message(message)
-    except Exception:
-        return {"status": "failed", "sent": False, "message": message}
-    return {"status": "sent" if sent else "failed", "sent": sent, "message": message}
+    from workers.repository import list_subscribers
+
+    # chat หลักจาก env + ผู้ที่สมัครผ่านบอท (ไม่ให้ซ้ำถ้าเป็นคนเดียวกัน)
+    targets: list[str] = []
+    if settings.telegram_chat_id:
+        targets.append(str(settings.telegram_chat_id))
+    for chat_id in list_subscribers(settings.database_url):
+        if chat_id not in targets:
+            targets.append(chat_id)
+
+    if not targets:
+        return {"status": "no_recipients", "sent": False, "message": message}
+
+    sent_count = 0
+    for chat_id in targets:
+        try:
+            if await telegram.send_message(message, chat_id=chat_id):
+                sent_count += 1
+        except Exception:
+            continue
+
+    return {
+        "status": "sent" if sent_count else "failed",
+        "sent": sent_count > 0,
+        "recipients": len(targets),
+        "delivered": sent_count,
+        "message": message,
+    }

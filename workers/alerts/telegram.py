@@ -10,7 +10,13 @@ class TelegramClient:
     def is_configured(self) -> bool:
         return bool(self.bot_token)
 
-    async def send_message(self, text: str, chat_id: str | None = None, parse_mode: str | None = None) -> bool:
+    async def send_message(
+        self,
+        text: str,
+        chat_id: str | None = None,
+        parse_mode: str | None = None,
+        reply_markup: dict | None = None,
+    ) -> bool:
         if not self.is_configured:
             return False
 
@@ -29,7 +35,23 @@ class TelegramClient:
         }
         if parse_mode:
             payload["parse_mode"] = parse_mode
+        if reply_markup:
+            payload["reply_markup"] = reply_markup
         async with httpx.AsyncClient(timeout=20) as client:
             response = await client.post(url, json=payload)
             response.raise_for_status()
+        return True
+
+    async def answer_callback_query(self, callback_query_id: str, text: str = "") -> bool:
+        """ตอบ callback ของปุ่ม inline — ถ้าไม่ตอบ Telegram จะโชว์ spinner ค้างบนปุ่ม."""
+        if not self.is_configured:
+            return False
+
+        import httpx
+
+        url = f"https://api.telegram.org/bot{self.bot_token}/answerCallbackQuery"
+        async with httpx.AsyncClient(timeout=10) as client:
+            await client.post(
+                url, json={"callback_query_id": callback_query_id, "text": text[:200]}
+            )
         return True

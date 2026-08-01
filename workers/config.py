@@ -96,6 +96,8 @@ class Settings:
     send_telegram: bool
     save_signals: bool
     background_workers_enabled: bool
+    price_alerts_enabled: bool
+    price_alerts_interval_minutes: int
     backend_cors_origins: list[str]
     top_signal_limit: int
     universe_mode: str
@@ -152,6 +154,12 @@ def get_settings() -> Settings:
         send_telegram=_env_bool("SEND_TELEGRAM"),
         save_signals=_env_bool("SAVE_SIGNALS"),
         background_workers_enabled=_env_bool("BACKGROUND_WORKERS_ENABLED", default=True),
+        # ปิดไว้ก่อนโดยตั้งใจ: web instance บนโฮสต์มี worker เดียว ถ้าเปิด loop นี้
+        # โดยไม่ได้ตั้งใจ จะไปแย่งเวลาประมวลผลกับ request ของผู้ใช้
+        price_alerts_enabled=_env_bool("PRICE_ALERTS_ENABLED", default=False),
+        price_alerts_interval_minutes=_env_int(
+            "PRICE_ALERTS_INTERVAL_MINUTES", default=15, minimum=5, maximum=180
+        ),
         backend_cors_origins=_env_csv("BACKEND_CORS_ORIGINS", "*"),
         top_signal_limit=_env_int("TOP_SIGNAL_LIMIT", default=10, minimum=1, maximum=100),
         universe_mode=os.getenv("UNIVERSE_MODE", "all").lower(),

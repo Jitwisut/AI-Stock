@@ -13,6 +13,7 @@ from workers.ai.summarize_signal import summarize_signals
 from workers.alerts.telegram import TelegramClient
 from workers.config import get_settings
 from workers.repository import (
+    bot_tables_ready,
     create_scan_run,
     database_available,
     get_signal,
@@ -767,6 +768,9 @@ def get_settings_status() -> dict:
         "admin_api_key_configured": bool(settings.admin_api_key),
         "database_configured": bool(settings.database_url),
         "database_reachable": database_available(settings.database_url),
+        # migration รันตอน startup แล้ว log อย่างเดียวเมื่อพัง (ไม่ raise นอก production)
+        # ธงนี้จึงเป็นทางเดียวที่บอกได้ว่าตารางของบอทถูกสร้างจริงหรือยัง
+        "bot_storage_ready": bot_tables_ready(settings.database_url),
         "redis_configured": bool(settings.redis_url),
         "redis_reachable": redis_available(settings.redis_url),
         "top_signal_limit": settings.top_signal_limit,

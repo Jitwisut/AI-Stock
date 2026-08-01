@@ -121,3 +121,35 @@ CREATE TABLE IF NOT EXISTS telegram_alerts (
   sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   status TEXT NOT NULL
 );
+
+-- ── Telegram bot: watchlist / ผู้รับ digest / พอร์ตจำลอง ────────────────────
+-- ผูกกับ chat_id ของ Telegram โดยตรง (ยังไม่มีระบบ user ของเว็บ)
+
+CREATE TABLE IF NOT EXISTS bot_watchlist (
+  id BIGSERIAL PRIMARY KEY,
+  chat_id TEXT NOT NULL,
+  symbol TEXT NOT NULL,
+  target_price NUMERIC,
+  direction TEXT NOT NULL DEFAULT 'above',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_alert_at TIMESTAMPTZ,
+  UNIQUE (chat_id, symbol)
+);
+
+CREATE INDEX IF NOT EXISTS idx_bot_watchlist_symbol ON bot_watchlist (symbol);
+
+CREATE TABLE IF NOT EXISTS bot_subscribers (
+  chat_id TEXT PRIMARY KEY,
+  active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS bot_portfolio (
+  id BIGSERIAL PRIMARY KEY,
+  chat_id TEXT NOT NULL,
+  symbol TEXT NOT NULL,
+  quantity NUMERIC NOT NULL,
+  cost_basis NUMERIC NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (chat_id, symbol)
+);

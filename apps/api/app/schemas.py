@@ -178,6 +178,7 @@ class SettingsStatusOut(BaseModel):
     admin_api_key_configured: bool = False
     database_configured: bool
     database_reachable: bool
+    bot_storage_ready: bool = False
     redis_configured: bool = False
     redis_reachable: bool = False
     top_signal_limit: int

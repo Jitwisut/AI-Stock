@@ -533,6 +533,192 @@ def save_telegram_alert(database_url: str, signal_id: int | None, status: str) -
         _handle_repository_error("save telegram alert failed", exc, None)
 
 
+# ── Telegram bot storage: watchlist / subscribers / portfolio ────────────────
+# ทุกฟังก์ชันคืนค่า default เมื่อ DB ล่ม แทนที่จะโยน error ขึ้นไปถึงบอท
+# (บอทควรตอบผู้ใช้ว่าทำไม่สำเร็จ ไม่ใช่เงียบไปเฉย ๆ จึงคืน False/[] ให้ caller ตัดสินใจ)
+
+
+def bot_tables_ready(database_url: str) -> bool:
+    """ตารางของบอท (watchlist/subscribers/portfolio) ถูกสร้างครบหรือยัง."""
+    try:
+        from sqlalchemy import text
+
+        with _engine(database_url).connect() as connection:
+            for table in ("bot_watchlist", "bot_subscribers", "bot_portfolio"):
+                connection.execute(text(f"SELECT 1 FROM {table} LIMIT 1"))
+        return True
+    except Exception:
+        return False
+
+
+def add_watch(
+    database_url: str,
+    chat_id: str,
+    symbol: str,
+    target_price: float | None,
+    direction: str = "above",
+) -> bool:
+    try:
+        from sqlalchemy import text
+
+        with _engine(database_url).begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO bot_watchlist (chat_id, symbol, target_price, direction)
+                    VALUES (:chat_id, :symbol, :target_price, :direction)
+                    ON CONFLICT (chat_id, symbol) DO UPDATE
+                    SET target_price = EXCLUDED.target_price,
+                        direction = EXCLUDED.direction,
+                        last_alert_at = NULL
+                    """
+                ),
+                {
+                    "chat_id": str(chat_id),
+                    "symbol": symbol.upper(),
+                    "target_price": target_price,
+                    "direction": direction,
+                },
+            )
+        return True
+    except Exception as exc:
+        return _handle_repository_error("add watch failed", exc, False)
+
+
+def remove_watch(database_url: str, chat_id: str, symbol: str) -> bool:
+    try:
+        from sqlalchemy import text
+
+        with _engine(database_url).begin() as connection:
+            result = connection.execute(
+                text("DELETE FROM bot_watchlist WHERE chat_id = :chat_id AND symbol = :symbol"),
+                {"chat_id": str(chat_id), "symbol": symbol.upper()},
+            )
+        return bool(result.rowcount)
+    except Exception as exc:
+        return _handle_repository_error("remove watch failed", exc, False)
+
+
+def list_watches(database_url: str, chat_id: str | None = None) -> list[dict]:
+    """คืนรายการเฝ้าดู — ไม่ระบุ chat_id = ทุกคน (ใช้ตอน job เช็คราคา)."""
+    try:
+        from sqlalchemy import text
+
+        query = "SELECT * FROM bot_watchlist"
+        params: dict = {}
+        if chat_id is not None:
+            query += " WHERE chat_id = :chat_id"
+            params["chat_id"] = str(chat_id)
+        query += " ORDER BY symbol"
+        with _engine(database_url).connect() as connection:
+            rows = connection.execute(text(query), params).mappings().all()
+        return [dict(row) for row in rows]
+    except Exception as exc:
+        return _handle_repository_error("list watches failed", exc, [])
+
+
+def mark_watch_alerted(database_url: str, watch_id: int) -> None:
+    try:
+        from sqlalchemy import text
+
+        with _engine(database_url).begin() as connection:
+            connection.execute(
+                text("UPDATE bot_watchlist SET last_alert_at = :now WHERE id = :id"),
+                {"now": datetime.now(timezone.utc), "id": watch_id},
+            )
+    except Exception as exc:
+        _handle_repository_error("mark watch alerted failed", exc, None)
+
+
+def set_subscriber(database_url: str, chat_id: str, active: bool) -> bool:
+    try:
+        from sqlalchemy import text
+
+        with _engine(database_url).begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO bot_subscribers (chat_id, active)
+                    VALUES (:chat_id, :active)
+                    ON CONFLICT (chat_id) DO UPDATE SET active = EXCLUDED.active
+                    """
+                ),
+                {"chat_id": str(chat_id), "active": active},
+            )
+        return True
+    except Exception as exc:
+        return _handle_repository_error("set subscriber failed", exc, False)
+
+
+def list_subscribers(database_url: str) -> list[str]:
+    try:
+        from sqlalchemy import text
+
+        with _engine(database_url).connect() as connection:
+            rows = connection.execute(
+                text("SELECT chat_id FROM bot_subscribers WHERE active = TRUE")
+            ).all()
+        return [str(row[0]) for row in rows]
+    except Exception as exc:
+        return _handle_repository_error("list subscribers failed", exc, [])
+
+
+def add_position(
+    database_url: str, chat_id: str, symbol: str, quantity: float, cost_basis: float
+) -> bool:
+    try:
+        from sqlalchemy import text
+
+        with _engine(database_url).begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO bot_portfolio (chat_id, symbol, quantity, cost_basis)
+                    VALUES (:chat_id, :symbol, :quantity, :cost_basis)
+                    ON CONFLICT (chat_id, symbol) DO UPDATE
+                    SET quantity = EXCLUDED.quantity, cost_basis = EXCLUDED.cost_basis
+                    """
+                ),
+                {
+                    "chat_id": str(chat_id),
+                    "symbol": symbol.upper(),
+                    "quantity": quantity,
+                    "cost_basis": cost_basis,
+                },
+            )
+        return True
+    except Exception as exc:
+        return _handle_repository_error("add position failed", exc, False)
+
+
+def remove_position(database_url: str, chat_id: str, symbol: str) -> bool:
+    try:
+        from sqlalchemy import text
+
+        with _engine(database_url).begin() as connection:
+            result = connection.execute(
+                text("DELETE FROM bot_portfolio WHERE chat_id = :chat_id AND symbol = :symbol"),
+                {"chat_id": str(chat_id), "symbol": symbol.upper()},
+            )
+        return bool(result.rowcount)
+    except Exception as exc:
+        return _handle_repository_error("remove position failed", exc, False)
+
+
+def list_positions(database_url: str, chat_id: str) -> list[dict]:
+    try:
+        from sqlalchemy import text
+
+        with _engine(database_url).connect() as connection:
+            rows = connection.execute(
+                text("SELECT * FROM bot_portfolio WHERE chat_id = :chat_id ORDER BY symbol"),
+                {"chat_id": str(chat_id)},
+            ).mappings().all()
+        return [dict(row) for row in rows]
+    except Exception as exc:
+        return _handle_repository_error("list positions failed", exc, [])
+
+
 def _normalize_signal_row(row) -> dict:
     data = dict(row)
     risks = data.get("risks") or []

@@ -27,8 +27,12 @@ _BROWSER_HEADERS = {
 
 
 class HistoryProvider:
-    def get_metrics(self, symbol: str) -> LongTermMetrics:
+    def get_closes(self, symbol: str) -> list[float]:
+        """ราคาปิดรายวัน เรียงเก่า→ใหม่ (ใช้ทั้งคำนวณ metrics และวาด sparkline)."""
         raise NotImplementedError
+
+    def get_metrics(self, symbol: str) -> LongTermMetrics:
+        return _metrics_from_closes(symbol, self.get_closes(symbol))
 
 
 def _metrics_from_closes(
@@ -76,7 +80,10 @@ def _metrics_from_closes(
 class YahooHistoryProvider(HistoryProvider):
     chart_url = "https://query1.finance.yahoo.com/v8/finance/chart"
 
-    def get_metrics(self, symbol: str) -> LongTermMetrics:
+    def get_closes(self, symbol: str) -> list[float]:
+        return [value for value in self._chart_closes(symbol)[0] if value is not None]
+
+    def _chart_closes(self, symbol: str) -> tuple[list, float | None]:
         request = Request(
             f"{self.chart_url}/{symbol}?{urlencode({'range': '1y', 'interval': '1d'})}",
             headers={"User-Agent": "stock-radar-ai/0.1"},
@@ -91,13 +98,17 @@ class YahooHistoryProvider(HistoryProvider):
         closes = chart.get("indicators", {}).get("quote", [{}])[0].get("close") or []
         # ใช้ราคาล่าสุดจาก meta หากมี เพื่อให้สดกว่าราคาปิดล่าสุด
         latest = chart.get("meta", {}).get("regularMarketPrice")
+        return closes, latest
+
+    def get_metrics(self, symbol: str) -> LongTermMetrics:
+        closes, latest = self._chart_closes(symbol)
         return _metrics_from_closes(symbol, closes, latest_price=latest)
 
 
 class StooqHistoryProvider(HistoryProvider):
     daily_url = "https://stooq.com/q/d/l/"
 
-    def get_metrics(self, symbol: str) -> LongTermMetrics:
+    def get_closes(self, symbol: str) -> list[float]:
         params = urlencode({"s": f"{symbol.lower()}.us", "i": "d"})
         request = Request(
             f"{self.daily_url}?{params}",
@@ -105,12 +116,11 @@ class StooqHistoryProvider(HistoryProvider):
         )
         with urlopen(request, timeout=15) as response:
             content = response.read().decode("utf-8")
-        closes = [
+        return [
             float(row["Close"])
             for row in csv.DictReader(StringIO(content))
             if row.get("Close") not in {None, "", "N/D"}
         ]
-        return _metrics_from_closes(symbol, closes)
 
 
 class NasdaqHistoryProvider(HistoryProvider):
@@ -118,7 +128,7 @@ class NasdaqHistoryProvider(HistoryProvider):
 
     historical_url = "https://api.nasdaq.com/api/quote/{symbol}/historical"
 
-    def get_metrics(self, symbol: str) -> LongTermMetrics:
+    def get_closes(self, symbol: str) -> list[float]:
         today = datetime.now(timezone.utc).date()
         # ไล่ assetclass (stocks → etf) เพราะ ETF ตอบ data=null เมื่อใช้ชนิดผิด
         payload = fetch_nasdaq_json(
@@ -134,12 +144,11 @@ class NasdaqHistoryProvider(HistoryProvider):
 
         rows = (((payload.get("data") or {}).get("tradesTable") or {}).get("rows")) or []
         # Nasdaq เรียงใหม่→เก่า; _metrics_from_closes ต้องการเก่า→ใหม่ จึง reverse
-        closes = [
+        return [
             float(row["close"].replace("$", "").replace(",", "").strip())
             for row in reversed(rows)
             if row.get("close")
         ]
-        return _metrics_from_closes(symbol, closes)
 
 
 class MockHistoryProvider(HistoryProvider):
@@ -156,7 +165,7 @@ class MockHistoryProvider(HistoryProvider):
         "JPM": (190.0, 0.0004),
     }
 
-    def get_metrics(self, symbol: str) -> LongTermMetrics:
+    def get_closes(self, symbol: str) -> list[float]:
         start, drift = self._profiles.get(symbol, (100.0, 0.0002))
         # เดินราคาแบบ deterministic (sine + drift) ให้ได้เทรนด์ที่ต่างกันต่อ symbol
         import math
@@ -166,13 +175,19 @@ class MockHistoryProvider(HistoryProvider):
         for day in range(_TRADING_DAYS_YEAR):
             wave = math.sin((day + seed) / 18.0) * 0.04
             closes.append(start * (1 + drift * day + wave))
-        return _metrics_from_closes(symbol, closes)
+        return closes
 
 
 class FallbackHistoryProvider(HistoryProvider):
     def __init__(self, primary: HistoryProvider, fallback: HistoryProvider) -> None:
         self.primary = primary
         self.fallback = fallback
+
+    def get_closes(self, symbol: str) -> list[float]:
+        try:
+            return self.primary.get_closes(symbol)
+        except Exception:
+            return self.fallback.get_closes(symbol)
 
     def get_metrics(self, symbol: str) -> LongTermMetrics:
         try:
