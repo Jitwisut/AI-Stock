@@ -41,14 +41,25 @@ from workers.services import (
 from workers.repository import database_available, run_migrations
 from workers.scanner.fetch_prices import MarketDataUnavailableError
 
+# เมนูคำสั่งที่ส่งให้ Telegram ผ่าน setMyCommands (โชว์ autocomplete ในแชท)
+_BOT_COMMAND_MENU = [
+    {"command": "analyze", "description": "วิเคราะห์หุ้นรายตัว เช่น /analyze AAPL"},
+    {"command": "surge", "description": "หุ้นซิ่งวันนี้ (คัดกรองโดย AI)"},
+    {"command": "longterm", "description": "หุ้นน่าสนใจระยะยาว"},
+    {"command": "digest", "description": "สรุปรายวัน (ซิ่ง + ระยะยาว)"},
+    {"command": "scan", "description": "สแกนหุ้นใหม่ทันที"},
+    {"command": "help", "description": "ดูคำสั่งทั้งหมด"},
+]
+
+
 async def _on_startup() -> None:
     """ส่ง deploy notification + digest เข้า Telegram และลงทะเบียน webhook อัตโนมัติ."""
     await asyncio.sleep(5)  # รอให้ server boot เสร็จก่อน
     settings = get_settings()
-    if settings.app_env != "production":
-        return
 
     # --- ลงทะเบียน Telegram webhook โดยใช้ RENDER_EXTERNAL_URL ที่ Render inject ให้ ---
+    # ไม่ผูกกับ APP_ENV: service จริงบน Render รายงาน app_env=development อยู่ จึงเคย
+    # ข้ามขั้นนี้ทั้งหมด ทำให้ webhook ค้างชี้ service เก่าที่ตายแล้วและบอทเงียบสนิท
     render_url = os.getenv("RENDER_EXTERNAL_URL", "").rstrip("/")
     if render_url and settings.telegram_bot_token:
         try:
@@ -58,11 +69,16 @@ async def _on_startup() -> None:
                     f"https://api.telegram.org/bot{settings.telegram_bot_token}/setWebhook",
                     json={"url": f"{render_url}/telegram/webhook"},
                 )
+                # ลงทะเบียนเมนูคำสั่งให้ Telegram ขึ้น autocomplete ให้ผู้ใช้
+                await client.post(
+                    f"https://api.telegram.org/bot{settings.telegram_bot_token}/setMyCommands",
+                    json={"commands": _BOT_COMMAND_MENU},
+                )
             logger.info("Telegram webhook registered: %s/telegram/webhook", render_url)
         except Exception as exc:
             logger.warning("webhook registration failed: %s", exc)
 
-    if not settings.send_telegram:
+    if settings.app_env != "production" or not settings.send_telegram:
         return
 
     from workers.alerts.digest import build_daily_digest
@@ -362,6 +378,14 @@ def _parse_alert_arg(arg: str, *, default: int, min_count: int = 5, max_count: i
     return max(min_count, min(max_count, count)), False
 
 
+def _looks_like_symbol_query(text: str) -> bool:
+    """ข้อความที่ไม่มี '/' นำหน้าแต่หน้าตาเป็น ticker (AAPL, voo, BRK.B) → ถือเป็นคำขอวิเคราะห์."""
+    token = text.strip()
+    if not token or " " in token or len(token) > 12:
+        return False
+    return token.replace(".", "").replace("-", "").isalnum() and not token.isdigit()
+
+
 def _clip_telegram_text(text: str, *, limit: int = _TELEGRAM_MAX_CHARS) -> str:
     """กันข้อความเกิน Telegram hard limit (4096 ตัวอักษร) ทำให้ sendMessage ล้มเหลวทั้งข้อความ."""
     if len(text) <= limit:
@@ -479,11 +503,17 @@ async def _handle_bot_command(command: str, chat_id: str) -> None:
     if not telegram.is_configured:
         return
 
-    cmd = command.strip().lower()
     # แยก command กับ argument (เช่น "/analyze AAPL" -> cmd_word="/analyze", arg="AAPL")
     parts = command.strip().split(maxsplit=1)
     cmd_word = parts[0].lower() if parts else ""
     arg = parts[1].strip() if len(parts) > 1 else ""
+    # ในกลุ่ม Telegram ส่งคำสั่งมาเป็น "/surge@MyBot" — ต้องตัด @botname ทิ้งก่อน
+    if "@" in cmd_word:
+        cmd_word = cmd_word.split("@", 1)[0]
+    # พิมพ์ชื่อหุ้นเปล่า ๆ ("AAPL", "voo") ให้ถือว่าเป็นการขอวิเคราะห์รายตัว
+    if cmd_word and not cmd_word.startswith("/") and _looks_like_symbol_query(command):
+        arg = command.strip()
+        cmd_word = "/analyze"
     try:
         if cmd_word in ("/analyze", "/a", "/วิเคราะห์", "/stock"):
             if not arg:
@@ -547,7 +577,7 @@ async def _handle_bot_command(command: str, chat_id: str) -> None:
             lines.append("\nพิมพ์ /longterm 30 เพื่อดูมากขึ้น")
             await telegram.send_message(_clip_telegram_text("\n".join(lines)), chat_id=chat_id)
 
-        elif cmd in ("/scan", "/สแกน", "/update"):
+        elif cmd_word in ("/scan", "/สแกน", "/update"):
             await telegram.send_message("🔄 เริ่ม scan หุ้น... รอประมาณ 1-2 นาที", chat_id=chat_id)
             from workers.services import create_queued_scan, execute_scan_job
             import asyncio, concurrent.futures
@@ -564,16 +594,17 @@ async def _handle_bot_command(command: str, chat_id: str) -> None:
             await loop.run_in_executor(concurrent.futures.ThreadPoolExecutor(), _run_scans)
             await telegram.send_message("✅ Scan เสร็จแล้ว! ลอง /surge หรือ /longterm ได้เลย", chat_id=chat_id)
 
-        elif cmd in ("/digest", "/summary", "/สรุป"):
+        elif cmd_word in ("/digest", "/summary", "/สรุป"):
             from workers.alerts.digest import build_daily_digest
 
             await telegram.send_message(build_daily_digest(), chat_id=chat_id)
 
-        elif cmd in ("/start", "/help"):
+        elif cmd_word in ("/start", "/help"):
             help_text = (
                 "🤖 คำสั่งที่ใช้ได้:\n\n"
                 "/analyze SYMBOL — วิเคราะห์หุ้นรายตัว (จุดเข้า/จุดขาย/ข่าว/AI)\n"
                 "   เช่น /analyze AAPL หรือ /a TSLA\n"
+                "   หรือพิมพ์ชื่อหุ้นเปล่า ๆ ก็ได้ เช่น VOO\n"
                 "/scan — สแกนหุ้นใหม่ (ใช้ครั้งแรกหรือเมื่อข้อมูลหมดอายุ)\n"
                 f"/surge — หุ้นซิ่ง Top {settings.surge_alert_limit} (คัดกรองโดย AI)\n"
                 "   /surge 30 — ขอเพิ่มจำนวน (5-30) · /surge live — สแกนราคาสด\n"
@@ -635,8 +666,15 @@ async def telegram_set_webhook(url: Optional[str] = None) -> dict:
     if not settings.telegram_bot_token:
         return {"status": "no_token"}
 
-    target_url = url or "https://ai-stock-e6ks.vercel.app/telegram/webhook"
+    # default = service ที่กำลังรันอยู่จริง (Render inject RENDER_EXTERNAL_URL ให้)
+    # ของเดิม hardcode URL Vercel เก่าไว้ ทำให้เผลอชี้ webhook ไป service ที่ตายแล้ว
+    render_url = os.getenv("RENDER_EXTERNAL_URL", "https://ai-stock-01or.onrender.com").rstrip("/")
+    target_url = url or f"{render_url}/telegram/webhook"
     api_url = f"https://api.telegram.org/bot{settings.telegram_bot_token}/setWebhook"
     async with httpx.AsyncClient(timeout=20) as client:
         resp = await client.post(api_url, json={"url": target_url})
+        await client.post(
+            f"https://api.telegram.org/bot{settings.telegram_bot_token}/setMyCommands",
+            json={"commands": _BOT_COMMAND_MENU},
+        )
         return {"status": "set", "url": target_url, "telegram_response": resp.json()}
