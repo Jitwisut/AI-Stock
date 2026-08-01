@@ -11,9 +11,14 @@ import { useMemo, useRef, useState } from "react";
 
 export type Bar = {
   date?: string | null;
+  open?: number | null;
+  high?: number | null;
+  low?: number | null;
   close: number;
   volume?: number | null;
 };
+
+type ChartMode = "area" | "candle";
 
 type Props = {
   bars: Bar[];
@@ -45,25 +50,35 @@ export function PriceVolumeChart({
   className
 }: Props) {
   const [hover, setHover] = useState<number | null>(null);
+  const [mode, setMode] = useState<ChartMode>("area");
   const wrapRef = useRef<HTMLDivElement>(null);
 
   const points = useMemo(() => bars.filter((bar) => bar.close > 0), [bars]);
   const hasVolume = points.some((bar) => (bar.volume ?? 0) > 0);
+  // แท่งเทียนต้องมี OHLC ครบ — provider สำรองบางตัวส่งมาแค่ราคาปิด
+  const hasOhlc = points.every(
+    (bar) => bar.open != null && bar.high != null && bar.low != null
+  );
+  const showCandles = mode === "candle" && hasOhlc;
 
   const geometry = useMemo(() => {
     if (points.length < 2) return null;
     const width = 600;
+    // โหมดแท่งเทียนต้องกินช่วง high-low ทั้งหมด ไม่ใช่แค่ราคาปิด
+    const values = showCandles
+      ? points.flatMap((bar) => [bar.high ?? bar.close, bar.low ?? bar.close])
+      : points.map((bar) => bar.close);
     const closes = points.map((bar) => bar.close);
-    const min = Math.min(...closes);
-    const max = Math.max(...closes);
+    const min = Math.min(...values);
+    const max = Math.max(...values);
     const span = max - min || 1;
     const stepX = (width - PAD_X * 2) / (points.length - 1);
     const usableY = height - PAD_Y * 2;
 
+    const toY = (value: number) => PAD_Y + usableY - ((value - min) / span) * usableY;
     const coords = points.map((bar, index) => {
       const x = PAD_X + index * stepX;
-      const y = PAD_Y + usableY - ((bar.close - min) / span) * usableY;
-      return { x, y, bar };
+      return { x, y: toY(bar.close), bar };
     });
 
     const line = coords
@@ -74,8 +89,8 @@ export function PriceVolumeChart({
     const maxVolume = Math.max(...points.map((bar) => bar.volume ?? 0), 1);
     const barWidth = Math.max(1.5, stepX * 0.62);
 
-    return { width, coords, line, area, min, max, stepX, maxVolume, barWidth };
-  }, [points, height]);
+    return { width, coords, line, area, min, max, stepX, maxVolume, barWidth, toY };
+  }, [points, height, showCandles]);
 
   if (!geometry) {
     return (
@@ -88,7 +103,7 @@ export function PriceVolumeChart({
     );
   }
 
-  const { width, coords, line, area, min, max, maxVolume, barWidth } = geometry;
+  const { width, coords, line, area, min, max, maxVolume, barWidth, toY } = geometry;
   const first = coords[0].bar.close;
   const last = coords[coords.length - 1].bar.close;
   const up = last >= first;
@@ -126,6 +141,29 @@ export function PriceVolumeChart({
           {changePercent.toFixed(1)}%
         </span>
         <span className="text-[10px] text-ink-subtle">ในช่วง {points.length} วันทำการ</span>
+
+        {/* สลับรูปแบบกราฟ — ปิดโหมดแท่งเทียนเมื่อแหล่งข้อมูลไม่มี OHLC ครบ */}
+        <div className="ml-auto inline-flex overflow-hidden rounded-lg border border-bg-line">
+          {(["area", "candle"] as const).map((option) => {
+            const disabled = option === "candle" && !hasOhlc;
+            const selected = mode === option;
+            return (
+              <button
+                key={option}
+                type="button"
+                onClick={() => setMode(option)}
+                disabled={disabled}
+                aria-pressed={selected}
+                title={disabled ? "แหล่งข้อมูลนี้ไม่มีราคาเปิด/สูง/ต่ำ" : undefined}
+                className={`cursor-pointer px-2 py-0.5 text-[10px] font-medium transition-colors duration-200 disabled:cursor-not-allowed disabled:opacity-40 ${
+                  selected ? "bg-bg-raised text-ink" : "text-ink-subtle hover:text-ink"
+                }`}
+              >
+                {option === "area" ? "พื้นที่" : "แท่งเทียน"}
+              </button>
+            );
+          })}
+        </div>
       </div>
       {/* แผงราคา */}
       <svg
@@ -149,16 +187,55 @@ export function PriceVolumeChart({
             vectorEffect="non-scaling-stroke"
           />
         ))}
-        <path d={area} fill={fill} />
-        <path
-          d={line}
-          fill="none"
-          stroke={stroke}
-          strokeWidth={2}
-          strokeLinejoin="round"
-          strokeLinecap="round"
-          vectorEffect="non-scaling-stroke"
-        />
+        {showCandles ? (
+          coords.map(({ x, bar }, index) => {
+            const open = bar.open ?? bar.close;
+            const high = bar.high ?? bar.close;
+            const low = bar.low ?? bar.close;
+            const rising = bar.close >= open;
+            const color = rising ? "rgb(var(--gain))" : "rgb(var(--loss))";
+            const bodyTop = toY(Math.max(open, bar.close));
+            const bodyBottom = toY(Math.min(open, bar.close));
+            return (
+              <g key={index} opacity={hover === null || hover === index ? 1 : 0.55}>
+                {/* ไส้เทียน: ช่วงสูงสุด-ต่ำสุดของวัน */}
+                <line
+                  x1={x}
+                  x2={x}
+                  y1={toY(high)}
+                  y2={toY(low)}
+                  stroke={color}
+                  strokeWidth={1}
+                  vectorEffect="non-scaling-stroke"
+                />
+                {/* ตัวเทียน: ช่วงราคาเปิด-ปิด (วันที่เท่ากันพอดีต้องเหลือเส้นบาง ๆ ให้เห็น) */}
+                <rect
+                  x={x - barWidth / 2}
+                  y={bodyTop}
+                  width={barWidth}
+                  height={Math.max(bodyBottom - bodyTop, 1)}
+                  fill={rising ? "none" : color}
+                  stroke={color}
+                  strokeWidth={1}
+                  vectorEffect="non-scaling-stroke"
+                />
+              </g>
+            );
+          })
+        ) : (
+          <>
+            <path d={area} fill={fill} />
+            <path
+              d={line}
+              fill="none"
+              stroke={stroke}
+              strokeWidth={2}
+              strokeLinejoin="round"
+              strokeLinecap="round"
+              vectorEffect="non-scaling-stroke"
+            />
+          </>
+        )}
         {active ? (
           <>
             <line
@@ -171,16 +248,20 @@ export function PriceVolumeChart({
               strokeDasharray="3 3"
               vectorEffect="non-scaling-stroke"
             />
-            <circle cx={active.x} cy={active.y} r={4} fill={stroke} />
-            <circle
-              cx={active.x}
-              cy={active.y}
-              r={4}
-              fill="none"
-              stroke="rgb(var(--bg-surface))"
-              strokeWidth={2}
-              vectorEffect="non-scaling-stroke"
-            />
+            {!showCandles ? (
+              <>
+                <circle cx={active.x} cy={active.y} r={4} fill={stroke} />
+                <circle
+                  cx={active.x}
+                  cy={active.y}
+                  r={4}
+                  fill="none"
+                  stroke="rgb(var(--bg-surface))"
+                  strokeWidth={2}
+                  vectorEffect="non-scaling-stroke"
+                />
+              </>
+            ) : null}
           </>
         ) : null}
       </svg>
@@ -237,6 +318,14 @@ export function PriceVolumeChart({
           <div className="font-mono font-semibold text-ink">
             ${active.bar.close.toFixed(2)}
           </div>
+          {showCandles && active.bar.open != null ? (
+            <div className="font-mono text-[10px] leading-4 text-ink-muted">
+              <div>เปิด ${active.bar.open.toFixed(2)}</div>
+              <div>
+                สูง ${active.bar.high?.toFixed(2)} · ต่ำ ${active.bar.low?.toFixed(2)}
+              </div>
+            </div>
+          ) : null}
           {active.bar.volume ? (
             <div className="text-ink-muted">วอลุ่ม {formatVolume(active.bar.volume)}</div>
           ) : null}

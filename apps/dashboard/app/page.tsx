@@ -266,28 +266,28 @@ export default function DashboardPage() {
   }, []);
 
   return (
-    <main className="relative z-10 mx-auto max-w-[1440px] px-4 py-5 sm:px-6 lg:px-8 lg:py-7">
+    <main className="ambient relative mx-auto max-w-[1440px] px-4 py-6 sm:px-6 lg:px-8">
       {/* ─────────── TOP BAR ─────────── */}
-      <header className="panel mb-5 flex flex-col gap-3 px-4 py-3 sm:px-5 lg:flex-row lg:items-center lg:justify-between">
-        <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gain/10 ring-1 ring-gain/25">
-            <Radar className="h-5 w-5 text-gain" />
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <h1 className="text-base font-semibold text-ink sm:text-lg">AI Momentum Radar</h1>
-              <span className="chip border-gain/30 bg-gain/10 text-gain">
-                <span className="relative flex h-1.5 w-1.5">
-                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-gain opacity-75" />
-                  <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-gain" />
-                </span>
-                LIVE
-              </span>
-            </div>
-            <p className="text-xs text-ink-muted">
-              ตลาดสหรัฐ · Pre-market scan · สรุปเป็นภาษาไทย
+      <header className="mb-6 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+        <div>
+          <div className="flex items-center gap-2">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-ink-subtle">
+              AI Stock Radar
             </p>
+            <span className="chip border-gain/30 bg-gain/10 text-gain">
+              <span className="relative flex h-1.5 w-1.5">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-gain opacity-75" />
+                <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-gain" />
+              </span>
+              LIVE
+            </span>
           </div>
+          <h1 className="mt-1 text-3xl font-semibold tracking-tight text-ink sm:text-4xl">
+            แดชบอร์ด
+          </h1>
+          <p className="mt-1.5 max-w-xl text-sm leading-6 text-ink-muted">
+            ตลาดสหรัฐ · สแกนโมเมนตัม · สรุปเป็นภาษาไทย
+          </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">

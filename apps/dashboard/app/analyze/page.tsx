@@ -159,18 +159,18 @@ function AnalyzePageContent() {
   }
 
   return (
-    <main className="relative z-10 mx-auto max-w-[1440px] px-4 py-5 sm:px-6 lg:px-8 lg:py-7">
-      <header className="panel mb-5 flex flex-col gap-4 px-4 py-4 sm:px-5 lg:flex-row lg:items-center lg:justify-between">
-        <div className="flex items-center gap-3">
-          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-accent-cyan/10 ring-1 ring-accent-cyan/30">
-            <BrainCircuit className="h-5 w-5 text-accent-cyan" />
-          </div>
-          <div>
-            <h1 className="text-lg font-semibold text-ink sm:text-xl">วิเคราะห์หุ้นรายตัว</h1>
-            <p className="text-xs text-ink-muted">
-              เจาะราคา โมเมนตัม ข่าว ความเสี่ยง และแผนเฝ้าดูเป็นภาษาไทย
-            </p>
-          </div>
+    <main className="ambient relative mx-auto max-w-[1440px] px-4 py-6 sm:px-6 lg:px-8">
+      <header className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-ink-subtle">
+            รายตัว
+          </p>
+          <h1 className="mt-1 text-3xl font-semibold tracking-tight text-ink sm:text-4xl">
+            วิเคราะห์หุ้นรายตัว
+          </h1>
+          <p className="mt-1.5 max-w-xl text-sm leading-6 text-ink-muted">
+            เจาะราคา โมเมนตัม ข่าว ความเสี่ยง และแผนเฝ้าดูเป็นภาษาไทย
+          </p>
         </div>
 
         <form onSubmit={(event) => void submitAnalysis(event)} className="flex w-full flex-col gap-2 sm:w-auto sm:min-w-[420px]">
@@ -239,7 +239,7 @@ function AnalyzePageContent() {
 
 function AnalyzeFallback() {
   return (
-    <main className="relative z-10 mx-auto max-w-[1440px] px-4 py-5 sm:px-6 lg:px-8 lg:py-7">
+    <main className="ambient relative mx-auto max-w-[1440px] px-4 py-6 sm:px-6 lg:px-8">
       <div className="panel h-36 skeleton" />
       <div className="mt-5 grid gap-4 lg:grid-cols-[0.9fr_1.4fr]">
         <div className="panel h-80 skeleton" />

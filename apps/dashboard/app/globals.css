@@ -174,9 +174,13 @@ textarea {
     background: rgb(var(--accent-violet) / var(--ambient-opacity));
   }
 
-  /* การ์ดหลัก: พื้นทึบ + ขอบบาง + เงานุ่ม (ไม่มี backdrop-blur ที่ทำให้ธีมสว่างขุ่น) */
+  /* การ์ดหลักของทุกหน้า — ใช้กระจกชุดเดียวกับหน้า "น่าสนใจวันนี้"
+     มนน้อยกว่า .glass เล็กน้อยเพราะใช้กับการ์ดย่อยจำนวนมาก */
   .panel {
-    @apply rounded-2xl border border-bg-line bg-bg-surface shadow-card;
+    @apply rounded-2xl border backdrop-blur-xl;
+    background: rgb(var(--glass-bg) / var(--glass-opacity));
+    border-color: rgb(var(--glass-border) / var(--glass-border-opacity));
+    box-shadow: var(--shadow-card);
   }
   .panel-raised {
     @apply rounded-2xl border border-bg-line bg-bg-raised shadow-soft;

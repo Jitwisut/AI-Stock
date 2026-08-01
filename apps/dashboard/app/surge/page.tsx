@@ -134,25 +134,25 @@ export default function SurgePage() {
   }, [signals]);
 
   return (
-    <main className="relative z-10 mx-auto max-w-[1440px] px-4 py-5 sm:px-6 lg:px-8 lg:py-7">
+    <main className="ambient relative mx-auto max-w-[1440px] px-4 py-6 sm:px-6 lg:px-8">
       {/* Header */}
-      <header className="panel mb-5 flex flex-col gap-3 px-4 py-4 sm:px-5 lg:flex-row lg:items-center lg:justify-between">
-        <div className="flex items-center gap-3">
-          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-loss/10 ring-1 ring-loss/25">
-            <Flame className="h-5 w-5 text-loss" />
-          </div>
-          <div>
-            <h1 className="text-lg font-semibold text-ink sm:text-xl">หุ้นซิ่ง · ถือไว ออกไว</h1>
-            <p className="text-xs text-ink-muted">
-              สแกนกว้างทั้งตลาด US แล้วรีเฟรชตัวเต็งด้วย quote สดเพื่อจับ top movers หุ้นเล็ก/low-float
-            </p>
-          </div>
+      <header className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-ink-subtle">
+            ระยะสั้น
+          </p>
+          <h1 className="mt-1 text-3xl font-semibold tracking-tight text-ink sm:text-4xl">
+            หุ้นซิ่ง · ถือไว ออกไว
+          </h1>
+          <p className="mt-1.5 max-w-xl text-sm leading-6 text-ink-muted">
+            สแกนกว้างทั้งตลาด US แล้วรีเฟรชตัวเต็งด้วย quote สดเพื่อจับ top movers หุ้นเล็ก/low-float
+          </p>
         </div>
         <button
           type="button"
           onClick={() => void loadSurge(true)}
           disabled={loading}
-          className="focus-ring inline-flex h-9 cursor-pointer items-center gap-2 self-start rounded-lg bg-loss px-4 text-sm font-semibold text-bg-base shadow-soft transition-colors duration-200 hover:bg-loss-soft disabled:cursor-not-allowed disabled:opacity-60 lg:self-auto"
+          className="focus-ring inline-flex h-9 cursor-pointer items-center gap-2 self-start rounded-full bg-loss px-4 text-sm font-semibold text-bg-base shadow-soft transition-colors duration-200 hover:bg-loss-soft disabled:cursor-not-allowed disabled:opacity-60 lg:self-auto"
         >
           <Zap className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
           {loading ? "กำลังสแกน..." : "สแกนซิ่งใหม่"}

@@ -38,7 +38,10 @@ class HistoryProvider:
         override เอง หน้าเว็บจะซ่อนแผงวอลุ่มเมื่อไม่มีข้อมูล
         """
         closes = self.get_closes(symbol)[-days:]
-        return [{"date": None, "close": close, "volume": None} for close in closes]
+        return [
+            {"date": None, "open": None, "high": None, "low": None, "close": close, "volume": None}
+            for close in closes
+        ]
 
     def get_metrics(self, symbol: str) -> LongTermMetrics:
         return _metrics_from_closes(symbol, self.get_closes(symbol))
@@ -128,8 +131,16 @@ class YahooHistoryProvider(HistoryProvider):
         chart = results[0]
         quote = chart.get("indicators", {}).get("quote", [{}])[0]
         closes = quote.get("close") or []
+        opens = quote.get("open") or []
+        highs = quote.get("high") or []
+        lows = quote.get("low") or []
         volumes = quote.get("volume") or []
         stamps = chart.get("timestamp") or []
+
+        def _at(values: list, index: int) -> float | None:
+            value = values[index] if index < len(values) else None
+            return float(value) if value is not None else None
+
         bars = []
         for index, close in enumerate(closes):
             if close is None:
@@ -142,6 +153,9 @@ class YahooHistoryProvider(HistoryProvider):
                         if stamp
                         else None
                     ),
+                    "open": _at(opens, index),
+                    "high": _at(highs, index),
+                    "low": _at(lows, index),
                     "close": float(close),
                     "volume": int(volumes[index]) if index < len(volumes) and volumes[index] else None,
                 }
@@ -205,6 +219,9 @@ class NasdaqHistoryProvider(HistoryProvider):
             bars.append(
                 {
                     "date": row.get("date"),
+                    "open": _money(row["open"]) if row.get("open") else None,
+                    "high": _money(row["high"]) if row.get("high") else None,
+                    "low": _money(row["low"]) if row.get("low") else None,
                     "close": _money(row["close"]),
                     "volume": int(_money(row.get("volume") or 0)) or None,
                 }
