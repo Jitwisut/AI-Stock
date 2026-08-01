@@ -381,7 +381,7 @@ def _parse_alert_arg(arg: str, *, default: int, min_count: int = 5, max_count: i
 def _looks_like_symbol_query(text: str) -> bool:
     """ข้อความที่ไม่มี '/' นำหน้าแต่หน้าตาเป็น ticker (AAPL, voo, BRK.B) → ถือเป็นคำขอวิเคราะห์."""
     token = text.strip()
-    if not token or " " in token or len(token) > 12:
+    if not token or " " in token or len(token) > 12 or not token.isascii():
         return False
     return token.replace(".", "").replace("-", "").isalnum() and not token.isdigit()
 
