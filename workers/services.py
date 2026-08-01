@@ -883,9 +883,23 @@ def _redis_lock(name: str, timeout_seconds: int):
 
 
 def _run_async_scan(coro):
-    import asyncio
+    """รัน coroutine จากโค้ดแบบ sync ให้ได้ ไม่ว่าจะถูกเรียกจากที่ไหน.
 
-    return asyncio.run(coro)
+    endpoint /scan/run เป็น async def จึงมี event loop ทำงานอยู่แล้ว การเรียก
+    asyncio.run() ตรง ๆ ในสถานการณ์นั้นจะได้ RuntimeError ทันที
+    ("asyncio.run() cannot be called from a running event loop") ทำให้ปุ่มสแกน
+    บนแดชบอร์ดพังมาตลอด — ถ้ามี loop อยู่แล้วให้ย้ายไปรันในเธรดใหม่ที่มี loop ของตัวเอง
+    """
+    import asyncio
+    from concurrent.futures import ThreadPoolExecutor
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        return executor.submit(asyncio.run, coro).result()
 
 
 def _get_dynamic_surge_snapshots(settings) -> dict[str, MarketSnapshot]:

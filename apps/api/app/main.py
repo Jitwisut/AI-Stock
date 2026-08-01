@@ -116,7 +116,7 @@ async def _on_startup() -> None:
             try:
                 from workers.daily_picks import get_daily_picks
 
-                await get_daily_picks(limit=10)
+                await get_daily_picks(limit=10, wait=True)
                 logger.info("daily picks cache warmed")
             except Exception as exc:
                 logger.warning("daily picks warm-up failed: %s", exc)
@@ -1038,7 +1038,7 @@ async def _handle_bot_command(command: str, chat_id: str, chat_type: str = "priv
             from workers.daily_picks import get_daily_picks
 
             count, _fresh = _parse_alert_arg(arg, default=5, min_count=3, max_count=10)
-            data = await get_daily_picks(limit=count)
+            data = await get_daily_picks(limit=count, wait=True)
             await telegram.send_message(
                 _clip_telegram_text(_format_daily_picks(data)), chat_id=chat_id
             )

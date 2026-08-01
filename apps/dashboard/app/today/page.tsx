@@ -13,8 +13,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { GaugeRing } from "../../components/GaugeRing";
 import { PriceVolumeChart, type Bar } from "../../components/PriceVolumeChart";
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+import { delay, fetchJson } from "../../lib/api";
 
 type PickNews = {
   title: string;
@@ -56,7 +55,13 @@ type PicksResponse = {
   disclaimer: string;
   cached?: boolean;
   stale?: boolean;
+  /** "building" = เซิร์ฟเวอร์กำลังคำนวณรอบแรกอยู่ ให้ถามซ้ำเรื่อย ๆ */
+  status?: string;
 };
+
+// คำนวณรอบแรกใช้เวลาราวนาทีครึ่ง เผื่อไว้ถึง 3 นาที
+const POLL_INTERVAL_MS = 5_000;
+const POLL_MAX_ATTEMPTS = 36;
 
 const VERDICT_TONE: Record<string, string> = {
   "น่าสนใจมาก": "bg-gain/10 text-gain ring-gain/30",
@@ -103,29 +108,39 @@ export default function TodayPage() {
   const [data, setData] = useState<PicksResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [building, setBuilding] = useState(false);
   const [selected, setSelected] = useState<string>("");
 
+  /**
+   * เซิร์ฟเวอร์ตอบทันทีเสมอ ถ้ายังคำนวณไม่เสร็จจะได้ status="building"
+   * จึงต้องถามซ้ำเป็นระยะ แทนการค้างรอคำขอเดียวนานเป็นนาที (ซึ่งเคยทำให้หน้าว่าง
+   * จนกว่าจะกดรีเฟรชเอง)
+   */
   async function load(refresh = false) {
     setError("");
     setLoading(true);
     try {
-      const response = await fetch(
-        `${API_BASE_URL}/picks/today?limit=10${refresh ? "&refresh=true" : ""}`,
-        { cache: "no-store" }
-      );
-      if (!response.ok) {
-        throw new Error(
-          response.status === 503
-            ? "ข้อมูลราคาถูกจำกัดชั่วคราว ลองใหม่อีกครั้งใน 1-2 นาที"
-            : "เรียกข้อมูลหุ้นน่าสนใจวันนี้ไม่สำเร็จ"
-        );
+      for (let attempt = 0; attempt < POLL_MAX_ATTEMPTS; attempt++) {
+        const query = attempt === 0 && refresh ? "&refresh=true" : "";
+        const payload = await fetchJson<PicksResponse>(`/picks/today?limit=10${query}`);
+
+        if (payload.picks.length > 0) {
+          setData(payload);
+          setSelected((current) => current || payload.picks[0]?.symbol || "");
+          return;
+        }
+        if (payload.status !== "building") {
+          setData(payload);
+          return;
+        }
+        setBuilding(true);
+        await delay(POLL_INTERVAL_MS);
       }
-      const payload = (await response.json()) as PicksResponse;
-      setData(payload);
-      setSelected((current) => current || payload.picks[0]?.symbol || "");
+      setError("คำนวณนานผิดปกติ ลองกดรีเฟรชอีกครั้ง");
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "โหลดไม่สำเร็จ");
     } finally {
+      setBuilding(false);
       setLoading(false);
     }
   }
@@ -188,8 +203,14 @@ export default function TodayPage() {
       ) : null}
 
       {loading && picks.length === 0 ? (
-        <div className="glass px-6 py-16 text-center text-sm text-ink-muted">
-          กำลังสแกนตลาดและวิเคราะห์กราฟ... รอบแรกใช้เวลาราว 1 นาที
+        <div className="glass px-6 py-16 text-center">
+          <div className="mx-auto mb-3 h-6 w-6 animate-spin rounded-full border-2 border-bg-line border-t-gain" />
+          <p className="text-sm text-ink-muted">
+            {building
+              ? "กำลังสแกนตลาดและให้ AI อ่านกราฟ... รอบแรกใช้เวลาราว 1-2 นาที"
+              : "กำลังโหลดข้อมูล..."}
+          </p>
+          <p className="mt-1 text-xs text-ink-subtle">หน้าจะขึ้นเองเมื่อเสร็จ ไม่ต้องกดรีเฟรช</p>
         </div>
       ) : picks.length === 0 ? (
         !error ? (

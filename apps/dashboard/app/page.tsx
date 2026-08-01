@@ -30,8 +30,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { DataSourceBadge, Delta, ScoreBadge } from "../components/Atoms";
 import { Sparkline } from "../components/Sparkline";
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+import { API_BASE_URL, fetchJson } from "../lib/api";
 const ADMIN_API_KEY = process.env.NEXT_PUBLIC_ADMIN_API_KEY ?? "";
 
 type ScoreBreakdown = {
@@ -160,32 +159,47 @@ export default function DashboardPage() {
   const scanDisabled =
     runningScan || Boolean(status && (!status.use_live_data || status.allow_mock_data));
 
+  /**
+   * โหลดแยกกันสองคำขอ ไม่ผูกด้วย Promise.all ที่เดียว — ของเดิมถ้าคำขอใดพลาด
+   * (เช่นเซิร์ฟเวอร์เพิ่งตื่นแล้วตอบ 502) ทั้งหน้าจะว่าง ต้องกดรีเฟรชเอง
+   * ตอนนี้แต่ละส่วนที่สำเร็จจะแสดงผลได้เอง และมี retry ให้ในตัว
+   */
   async function loadDashboard() {
     setError("");
     setLoading(true);
-    try {
-      const [signalResponse, statusResponse] = await Promise.all([
-        fetch(`${API_BASE_URL}/signals/latest?limit=10`, { cache: "no-store" }),
-        fetch(`${API_BASE_URL}/settings/status`, { cache: "no-store" })
-      ]);
-      if (!signalResponse.ok || !statusResponse.ok) {
-        throw new Error("เรียกข้อมูลจาก API ไม่สำเร็จ");
-      }
-      const signalData = (await signalResponse.json()) as Signal[];
-      const statusData = (await statusResponse.json()) as SettingsStatus;
-      setSignals(signalData);
+
+    const [signalResult, statusResult] = await Promise.allSettled([
+      fetchJson<Signal[]>("/signals/latest?limit=10", { timeoutMs: 90_000 }),
+      fetchJson<SettingsStatus>("/settings/status")
+    ]);
+
+    if (statusResult.status === "fulfilled") {
+      const statusData = statusResult.value;
       setStatus(statusData);
       setScanMeta((current) => ({
         ...current,
         universe: statusData.scan_universe_limit || current.universe
       }));
-      setSelectedSymbol((current) => current || signalData[0]?.symbol || "");
-      void loadStocks();
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "โหลดแดชบอร์ดไม่สำเร็จ");
-    } finally {
-      setLoading(false);
     }
+
+    if (signalResult.status === "fulfilled") {
+      const signalData = signalResult.value;
+      setSignals(signalData);
+      setSelectedSymbol((current) => current || signalData[0]?.symbol || "");
+    }
+
+    if (signalResult.status === "rejected" && statusResult.status === "rejected") {
+      setError(
+        signalResult.reason instanceof Error
+          ? signalResult.reason.message
+          : "โหลดแดชบอร์ดไม่สำเร็จ"
+      );
+    } else if (signalResult.status === "rejected") {
+      setError("โหลดรายการสัญญาณไม่สำเร็จ (ส่วนอื่นยังใช้ได้)");
+    }
+
+    void loadStocks();
+    setLoading(false);
   }
 
   async function runScan() {
@@ -193,7 +207,11 @@ export default function DashboardPage() {
     setError("");
     try {
       const headers: HeadersInit = ADMIN_API_KEY ? { "X-Admin-API-Key": ADMIN_API_KEY } : {};
-      const response = await fetch(`${API_BASE_URL}/scan/run?kind=momentum`, { method: "POST", headers });
+      const response = await fetch(`${API_BASE_URL}/scan/run?kind=momentum`, {
+        method: "POST",
+        headers,
+        signal: AbortSignal.timeout(180_000)
+      });
       if (!response.ok) {
         throw new Error("รันสแกนไม่สำเร็จ");
       }
@@ -222,21 +240,19 @@ export default function DashboardPage() {
   }
 
   async function loadStatus() {
-    const response = await fetch(`${API_BASE_URL}/settings/status`, { cache: "no-store" });
-    if (response.ok) {
-      setStatus((await response.json()) as SettingsStatus);
+    try {
+      setStatus(await fetchJson<SettingsStatus>("/settings/status"));
+    } catch {
+      // สถานะระบบไม่ใช่ข้อมูลหลักของหน้า ถ้าโหลดไม่ได้ก็ปล่อยของเดิมไว้
     }
   }
 
   async function loadStocks() {
     setLoadingStocks(true);
     try {
-      const response = await fetch(`${API_BASE_URL}/stocks`, { cache: "no-store" });
-      if (response.ok) {
-        const stockData = (await response.json()) as Stock[];
-        setStocks(stockData);
-        setStockCount(stockData.length);
-      }
+      const stockData = await fetchJson<Stock[]>("/stocks");
+      setStocks(stockData);
+      setStockCount(stockData.length);
     } catch {
       setStocks([]);
       setStockCount(0);

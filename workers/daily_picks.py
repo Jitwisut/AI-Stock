@@ -413,36 +413,69 @@ async def _refresh_cache(limit: int) -> dict:
     return result
 
 
-async def get_daily_picks(limit: int = 10, *, force: bool = False) -> dict:
+def _start_background_build(limit: int) -> None:
+    """เริ่มคำนวณเบื้องหลังหนึ่งงานเท่านั้น (กันยิงซ้ำเมื่อมีหลาย request พร้อมกัน)."""
+    import asyncio
+
+    if _PICKS_CACHE.get("building"):
+        return
+    _PICKS_CACHE["building"] = True
+
+    async def _run() -> None:
+        try:
+            await _refresh_cache(limit)
+        except Exception as exc:
+            logger.warning("daily picks background build failed: %s", exc)
+        finally:
+            _PICKS_CACHE["building"] = False
+
+    asyncio.create_task(_run())
+
+
+async def get_daily_picks(limit: int = 10, *, force: bool = False, wait: bool = False) -> dict:
     """เวอร์ชันมี cache — หน้าเว็บและบอทเรียกผ่านตัวนี้.
 
     การคำนวณสดใช้เวลา ~1 นาที (ราคาทั้ง universe + ประวัติ 1 ปีของตัวที่ผ่านคัด)
-    จึงใช้ stale-while-revalidate: ถ้ามีของเก่าอยู่ ส่งคืนทันทีแล้วรีเฟรชเบื้องหลัง
-    ผู้ใช้จะไม่เจอหน้าเว็บค้างรอ
-    """
-    import asyncio
+    ซึ่งนานเกินกว่าจะให้ HTTP request รอ — ก่อนหน้านี้หน้าเว็บจึงค้างยาวแล้วไม่ขึ้น
+    ข้อมูล จนกว่าจะกดรีเฟรชซ้ำ (รอบสองเจอแคชอุ่นแล้ว)
 
+    ตอนนี้จะตอบทันทีเสมอ: มีแคชก็คืนแคช (พร้อมรีเฟรชเบื้องหลังถ้าเก่า) ยังไม่มีก็
+    คืนสถานะ building ให้หน้าเว็บ poll ต่อ ส่วนบอท Telegram ใช้ wait=True เพราะ
+    ตอบกลับเป็นข้อความครั้งเดียว poll ไม่ได้
+    """
     now = time.time()
     cached = _PICKS_CACHE["data"]
-    is_fresh = cached and (now - _PICKS_CACHE["ts"]) < _PICKS_TTL_SECONDS
+    is_fresh = bool(cached) and (now - _PICKS_CACHE["ts"]) < _PICKS_TTL_SECONDS
 
-    if cached and not force:
-        if not is_fresh and not _PICKS_CACHE.get("refreshing"):
-            _PICKS_CACHE["refreshing"] = True
+    if wait and (force or not cached):
+        result = await _refresh_cache(limit)
+        return {
+            **result,
+            "picks": result["picks"][:limit],
+            "status": "ready" if result["picks"] else "empty",
+            "cached": False,
+            "stale": False,
+        }
 
-            async def _background() -> None:
-                try:
-                    await _refresh_cache(limit)
-                finally:
-                    _PICKS_CACHE["refreshing"] = False
+    if force or not is_fresh:
+        _start_background_build(limit)
 
-            asyncio.create_task(_background())
+    if cached:
         return {
             **cached,
             "picks": cached["picks"][:limit],
+            "status": "ready",
             "cached": True,
             "stale": not is_fresh,
         }
 
-    result = await _refresh_cache(limit)
-    return {**result, "picks": result["picks"][:limit], "cached": False, "stale": False}
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "analysis_source": "pending",
+        "status": "building",
+        "picks": [],
+        "universe_count": 0,
+        "disclaimer": _DISCLAIMER,
+        "cached": False,
+        "stale": False,
+    }
