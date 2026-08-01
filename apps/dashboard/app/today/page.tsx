@@ -200,8 +200,11 @@ export default function TodayPage() {
       ) : (
         <>
           {/* ── สปอตไลต์: หุ้นที่เลือกอยู่ ── */}
+          {/* layer-stack ต้องอยู่คนละ element กับ glass — backdrop-filter สร้าง
+              stacking context ของตัวเอง ชั้นรองที่ z-index -1 จะหนีออกไปข้างหลังไม่ได้ */}
           {active ? (
-            <section className="layer-stack glass mb-8 p-5 sm:p-6 lg:p-7">
+            <div className="layer-stack mb-8">
+            <section className="glass p-5 sm:p-6 lg:p-7">
               <div className="grid gap-6 lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)]">
                 {/* ซ้าย: อันดับ + วงแหวนโอกาส + เหตุผล */}
                 <div className="flex flex-col gap-4">
@@ -340,6 +343,7 @@ export default function TodayPage() {
                 </div>
               </div>
             </section>
+            </div>
           ) : null}
 
           {/* ── แถวอันดับ: กดเพื่อสลับสปอตไลต์ ── */}
