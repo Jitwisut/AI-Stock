@@ -4,6 +4,8 @@ import { BrainCircuit, Flame, LineChart, ListOrdered, Radar, Sparkles } from "lu
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
+import { ThemeToggle } from "./ThemeToggle";
+
 const LINKS = [
   { href: "/", label: "แดชบอร์ด", short: "หลัก", icon: Radar },
   { href: "/today", label: "น่าสนใจวันนี้", short: "วันนี้", icon: Sparkles },
@@ -21,8 +23,8 @@ export function NavBar() {
   return (
     <>
       {/* ── Desktop top nav ── */}
-      <nav className="sticky top-0 z-50 border-b border-bg-line bg-bg-base/80 backdrop-blur">
-        <div className="mx-auto flex max-w-[1440px] items-center gap-1 px-4 py-2 sm:px-6 lg:px-8">
+      <nav className="sticky top-0 z-50 border-b border-bg-line bg-bg-surface">
+        <div className="mx-auto flex max-w-[1440px] items-center gap-2 px-4 py-2.5 sm:px-6 lg:px-8">
           <span className="mr-auto text-xs font-semibold uppercase tracking-wider text-ink-subtle sm:mr-3">
             AI Radar
           </span>
@@ -34,9 +36,10 @@ export function NavBar() {
                 <Link
                   key={link.href}
                   href={link.href}
-                  className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition ${
+                  aria-current={active ? "page" : undefined}
+                  className={`inline-flex cursor-pointer items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors duration-200 ${
                     active
-                      ? "bg-gain/10 text-gain ring-1 ring-gain/30"
+                      ? "bg-gain/10 text-gain"
                       : "text-ink-muted hover:bg-bg-raised hover:text-ink"
                   }`}
                 >
@@ -46,11 +49,14 @@ export function NavBar() {
               );
             })}
           </div>
+          <div className="ml-auto sm:ml-2">
+            <ThemeToggle />
+          </div>
         </div>
       </nav>
 
       {/* ── Mobile bottom tab bar ── */}
-      <nav className="fixed bottom-0 left-0 right-0 z-40 border-t border-bg-line bg-bg-base/95 backdrop-blur sm:hidden">
+      <nav className="fixed bottom-0 left-0 right-0 z-40 border-t border-bg-line bg-bg-surface sm:hidden">
         <div className="flex">
           {LINKS.map((link) => {
             const active = isActive(link.href);
@@ -59,13 +65,12 @@ export function NavBar() {
               <Link
                 key={link.href}
                 href={link.href}
-                className={`flex flex-1 flex-col items-center gap-0.5 py-2.5 text-[10px] font-medium transition ${
+                aria-current={active ? "page" : undefined}
+                className={`flex flex-1 cursor-pointer flex-col items-center gap-0.5 py-2.5 text-[10px] font-medium transition-colors duration-200 ${
                   active ? "text-gain" : "text-ink-subtle"
                 }`}
               >
-                <Icon
-                  className={`h-5 w-5 ${active ? "drop-shadow-[0_0_8px_rgba(34,197,94,0.7)]" : ""}`}
-                />
+                <Icon className="h-5 w-5" />
                 {link.short}
               </Link>
             );

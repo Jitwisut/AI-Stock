@@ -78,19 +78,19 @@ const GRADE_STYLE: Record<string, { ring: string; text: string; bg: string; glow
   fire: {
     ring: "ring-loss/40",
     text: "text-loss",
-    bg: "bg-gradient-to-br from-loss/15 to-amber/10",
+    bg: "bg-loss/10",
     glow: "bg-loss/20"
   },
   strong: {
     ring: "ring-gain/40",
     text: "text-gain",
-    bg: "bg-gradient-to-br from-gain/12 to-bg-surface",
+    bg: "bg-gain/10",
     glow: "bg-gain/20"
   },
   watch: {
     ring: "ring-amber/40",
     text: "text-amber",
-    bg: "bg-gradient-to-br from-amber/10 to-bg-surface",
+    bg: "bg-amber/10",
     glow: "bg-amber/20"
   },
   caution: {
@@ -142,7 +142,7 @@ export default function SurgePage() {
       {/* Header */}
       <header className="panel mb-5 flex flex-col gap-3 px-4 py-4 sm:px-5 lg:flex-row lg:items-center lg:justify-between">
         <div className="flex items-center gap-3">
-          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-loss/30 to-amber/20 ring-1 ring-loss/30">
+          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-loss/10 ring-1 ring-loss/25">
             <Flame className="h-5 w-5 text-loss" />
           </div>
           <div>
@@ -156,7 +156,7 @@ export default function SurgePage() {
           type="button"
           onClick={() => void loadSurge(true)}
           disabled={loading}
-          className="focus-ring inline-flex h-9 cursor-pointer items-center gap-2 self-start rounded-lg bg-gradient-to-r from-loss to-amber px-4 text-sm font-semibold text-white shadow-glow transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60 lg:self-auto"
+          className="focus-ring inline-flex h-9 cursor-pointer items-center gap-2 self-start rounded-lg bg-loss px-4 text-sm font-semibold text-bg-base shadow-soft transition-colors duration-200 hover:bg-loss-soft disabled:cursor-not-allowed disabled:opacity-60 lg:self-auto"
         >
           <Zap className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
           {loading ? "กำลังสแกน..." : "สแกนซิ่งใหม่"}
@@ -235,7 +235,7 @@ function SurgeRow({ signal, rank }: { signal: SurgeSignal; rank: number }) {
     <Link
       href={analyzeHref}
       aria-label={`วิเคราะห์หุ้น ${signal.symbol}`}
-      className={`panel group relative block overflow-hidden p-4 ring-1 transition hover:-translate-y-0.5 hover:border-accent-cyan/40 hover:shadow-glow ${style.ring} ${style.bg}`}
+      className={`panel group relative block overflow-hidden p-4 ring-1 transition hover:-translate-y-0.5 hover:border-accent-cyan/40 hover:shadow-lift ${style.ring} ${style.bg}`}
     >
       <div className={`pointer-events-none absolute -right-10 -top-10 h-28 w-28 rounded-full blur-2xl ${style.glow}`} />
 

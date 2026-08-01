@@ -2,11 +2,72 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ─────────────────────────────────────────────────────────────
+   Design tokens — Soft Card
+   ไม่ใช้ไล่สี (gradient) ที่ใดเลย: พื้นทึบล้วน + เงานุ่ม + ขอบมน 18px
+   สีเก็บเป็น RGB channels เพื่อให้ Tailwind ใช้ opacity ได้ (bg-gain/10)
+   ───────────────────────────────────────────────────────────── */
+
 :root {
-  color-scheme: dark;
   --font-sans: "Inter", "Noto Sans Thai", system-ui, -apple-system, "Segoe UI",
     Roboto, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, "Menlo", monospace;
+}
+
+/* ── ธีมมืด (ค่าเริ่มต้น) ── */
+:root,
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg-base: 15 17 21; /* #0F1115 */
+  --bg-surface: 23 25 31; /* #17191F */
+  --bg-raised: 31 34 42; /* #1F222A */
+  --bg-line: 56 61 76; /* #383D4C */
+
+  --ink: 245 245 247; /* #F5F5F7 */
+  --ink-muted: 161 161 170; /* #A1A1AA */
+  --ink-subtle: 138 138 150; /* #8A8A96 — ผ่าน 4.5:1 บนทั้ง surface และ raised */
+
+  --gain: 34 197 94; /* #22C55E */
+  --gain-soft: 22 163 74;
+  --loss: 248 113 113; /* #F87171 อ่านง่ายกว่าบนพื้นเข้ม */
+  --loss-soft: 239 68 68;
+  --amber: 251 191 36; /* #FBBF24 */
+  --amber-soft: 245 158 11;
+  --accent-cyan: 34 211 238;
+  --accent-violet: 167 139 250;
+
+  /* เงานุ่มหลายชั้น — บนพื้นมืดต้องเข้มกว่าจึงจะเห็น */
+  --shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-card: 0 2px 8px rgba(0, 0, 0, 0.35), 0 8px 24px rgba(0, 0, 0, 0.28);
+  --shadow-lift: 0 4px 12px rgba(0, 0, 0, 0.4), 0 12px 32px rgba(0, 0, 0, 0.32);
+}
+
+/* ── ธีมสว่าง ── */
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --bg-base: 245 245 247; /* #F5F5F7 */
+  --bg-surface: 255 255 255; /* #FFFFFF */
+  --bg-raised: 239 239 242; /* #EFEFF2 */
+  --bg-line: 212 212 216; /* #D4D4D8 */
+
+  --ink: 24 24 27; /* #18181B */
+  --ink-muted: 82 82 91; /* #52525B — ผ่าน 4.5:1 บนพื้นขาว */
+  --ink-subtle: 107 107 115; /* #6B6B73 — ผ่าน 4.5:1 บนทุกพื้นของธีมสว่าง */
+
+  --gain: 21 128 61; /* #15803D เข้มพอให้อ่านบนพื้นขาว */
+  --gain-soft: 22 163 74;
+  --loss: 185 28 28; /* #B91C1C */
+  --loss-soft: 220 38 38;
+  --amber: 180 83 9; /* #B45309 */
+  --amber-soft: 217 119 6;
+  --accent-cyan: 14 116 144; /* #0E7490 */
+  --accent-violet: 109 40 217; /* #6D28D9 */
+
+  --shadow-soft: 0 1px 2px rgba(24, 24, 27, 0.06);
+  --shadow-card: 0 1px 3px rgba(24, 24, 27, 0.06), 0 6px 20px rgba(24, 24, 27, 0.06);
+  --shadow-lift: 0 2px 6px rgba(24, 24, 27, 0.08), 0 12px 28px rgba(24, 24, 27, 0.1);
 }
 
 * {
@@ -20,31 +81,12 @@ body {
 
 body {
   margin: 0;
-  background: #020617;
-  color: #f8fafc;
+  background: rgb(var(--bg-base));
+  color: rgb(var(--ink));
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
-}
-
-/* Subtle ambient gradient at the top of the page */
-body::before {
-  content: "";
-  position: fixed;
-  inset: 0 0 auto 0;
-  height: 420px;
-  background: radial-gradient(
-      800px circle at 20% 0%,
-      rgba(34, 197, 94, 0.08),
-      transparent 60%
-    ),
-    radial-gradient(
-      700px circle at 80% 0%,
-      rgba(167, 139, 250, 0.06),
-      transparent 60%
-    );
-  pointer-events: none;
-  z-index: 0;
+  transition: background-color 200ms ease, color 200ms ease;
 }
 
 button,
@@ -64,48 +106,37 @@ textarea {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #1e293b;
-  border-radius: 8px;
-  border: 2px solid #020617;
+  background: rgb(var(--bg-line));
+  border-radius: 999px;
+  border: 2px solid rgb(var(--bg-base));
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #334155;
+  background: rgb(var(--ink-subtle));
 }
 
 @layer components {
+  /* การ์ดหลัก: พื้นทึบ + ขอบบาง + เงานุ่ม (ไม่มี backdrop-blur ที่ทำให้ธีมสว่างขุ่น) */
   .panel {
-    @apply rounded-2xl border border-bg-line bg-bg-surface/80 backdrop-blur shadow-card;
+    @apply rounded-2xl border border-bg-line bg-bg-surface shadow-card;
   }
   .panel-raised {
-    @apply rounded-2xl border border-bg-line bg-bg-raised/80 backdrop-blur shadow-card;
+    @apply rounded-2xl border border-bg-line bg-bg-raised shadow-soft;
+  }
+  /* การ์ดที่กดได้ — ยกขึ้นเล็กน้อยตอน hover โดยไม่ขยับ layout */
+  .panel-interactive {
+    @apply panel cursor-pointer transition-shadow duration-200 hover:shadow-lift;
   }
   .chip {
-    @apply inline-flex items-center gap-1.5 rounded-md border border-bg-line bg-bg-raised/60 px-2 py-0.5 text-xs font-medium;
+    @apply inline-flex items-center gap-1.5 rounded-lg border border-bg-line bg-bg-raised px-2.5 py-1 text-xs font-medium;
   }
   .stat-number {
     @apply font-mono tabular-nums tracking-tight;
   }
-  .text-ink {
-    color: #f8fafc;
-  }
-  .text-ink-muted {
-    color: #94a3b8;
-  }
-  .text-ink-subtle {
-    color: #64748b;
-  }
-  /* Skeleton shimmer */
+  /* โครงกระดูกตอนโหลด — ใช้จางเข้าจางออกแทน shimmer ที่เป็นไล่สี */
   .skeleton {
-    background: linear-gradient(
-      90deg,
-      rgba(255, 255, 255, 0.04) 0%,
-      rgba(255, 255, 255, 0.08) 50%,
-      rgba(255, 255, 255, 0.04) 100%
-    );
-    background-size: 200% 100%;
-    animation: shimmer 1.6s linear infinite;
+    @apply rounded-lg bg-bg-raised;
+    animation: pulseSoft 1.6s ease-in-out infinite;
   }
-  /* Focus ring */
   .focus-ring {
     @apply outline-none ring-offset-2 ring-offset-bg-base focus-visible:ring-2 focus-visible:ring-gain/60;
   }
@@ -118,5 +149,6 @@ textarea {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }

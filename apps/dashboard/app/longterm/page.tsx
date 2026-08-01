@@ -104,7 +104,7 @@ export default function LongTermPage() {
     <main className="relative z-10 mx-auto max-w-[1440px] px-4 py-5 sm:px-6 lg:px-8 lg:py-7">
       <header className="panel mb-5 flex flex-col gap-3 px-4 py-4 sm:px-5 lg:flex-row lg:items-center lg:justify-between">
         <div className="flex items-center gap-3">
-          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-gain/30 to-accent-cyan/20 ring-1 ring-gain/30">
+          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-gain/10 ring-1 ring-gain/25">
             <LineChart className="h-5 w-5 text-gain" />
           </div>
           <div>
@@ -304,7 +304,7 @@ function LongTermDetail({ pick }: { pick: LongTermPick }) {
                 </div>
                 <div className="h-1.5 overflow-hidden rounded-full bg-bg-base">
                   <div
-                    className="h-full rounded-full bg-gradient-to-r from-gain to-gain-soft"
+                    className="h-full rounded-full bg-gain"
                     style={{ width: `${Math.min(100, (value / max) * 100)}%` }}
                   />
                 </div>

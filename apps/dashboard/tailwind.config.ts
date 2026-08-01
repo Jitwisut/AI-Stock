@@ -1,68 +1,71 @@
 import type { Config } from "tailwindcss";
 
+/**
+ * สีทุกตัวชี้ไปที่ CSS variable (เก็บเป็น RGB channels) เพื่อให้สลับธีมมืด/สว่าง
+ * ได้จากที่เดียวใน globals.css โดยหน้าเพจไม่ต้องเขียน dark: ทุกจุด
+ * รูปแบบ rgb(var(--x) / <alpha-value>) ทำให้ยังใช้ opacity แบบ bg-gain/10 ได้ตามปกติ
+ */
+const withAlpha = (variable: string) => `rgb(var(${variable}) / <alpha-value>)`;
+
 const config: Config = {
   content: ["./app/**/*.{ts,tsx}", "./components/**/*.{ts,tsx}"],
   theme: {
     extend: {
       colors: {
-        // Background scale
         bg: {
-          base: "#020617", // page background (slate-950)
-          surface: "#0B1220", // card background
-          raised: "#111B2E", // elevated card / hover
-          line: "#1E293B" // borders
+          base: withAlpha("--bg-base"),
+          surface: withAlpha("--bg-surface"),
+          raised: withAlpha("--bg-raised"),
+          line: withAlpha("--bg-line")
         },
-        // Text
         ink: {
-          DEFAULT: "#F8FAFC",
-          muted: "#94A3B8",
-          subtle: "#64748B"
+          DEFAULT: withAlpha("--ink"),
+          muted: withAlpha("--ink-muted"),
+          subtle: withAlpha("--ink-subtle")
         },
-        // Brand / signal
         gain: {
-          DEFAULT: "#22C55E",
-          soft: "#16A34A",
-          glow: "rgba(34, 197, 94, 0.18)"
+          DEFAULT: withAlpha("--gain"),
+          soft: withAlpha("--gain-soft")
         },
         loss: {
-          DEFAULT: "#EF4444",
-          soft: "#DC2626",
-          glow: "rgba(239, 68, 68, 0.18)"
+          DEFAULT: withAlpha("--loss"),
+          soft: withAlpha("--loss-soft")
         },
         amber: {
-          DEFAULT: "#F59E0B",
-          soft: "#D97706",
-          glow: "rgba(245, 158, 11, 0.18)"
+          DEFAULT: withAlpha("--amber"),
+          soft: withAlpha("--amber-soft")
         },
-        // Accent
         accent: {
-          cyan: "#22D3EE",
-          violet: "#A78BFA"
+          cyan: withAlpha("--accent-cyan"),
+          violet: withAlpha("--accent-violet")
         }
+      },
+      // ขอบมนกลาง ๆ: การ์ด 18px, ปุ่ม 10-14px — ปรับที่เดียวแล้วมีผลทุกหน้า
+      borderRadius: {
+        md: "8px",
+        lg: "10px",
+        xl: "14px",
+        "2xl": "18px",
+        "3xl": "24px"
       },
       fontFamily: {
         sans: ["var(--font-sans)", "system-ui", "sans-serif"],
         mono: ["var(--font-mono)", "ui-monospace", "monospace"]
       },
+      // เงานุ่มแบบ soft card — ค่าจริงอยู่ใน globals.css แยกตามธีม
       boxShadow: {
-        soft: "0 8px 24px rgba(2, 6, 23, 0.5)",
-        glow: "0 0 0 1px rgba(34, 197, 94, 0.25), 0 8px 32px rgba(34, 197, 94, 0.12)",
-        card: "0 1px 0 rgba(255,255,255,0.04) inset, 0 8px 24px rgba(2, 6, 23, 0.4)"
-      },
-      backgroundImage: {
-        "grid-fade":
-          "radial-gradient(circle at 50% 0%, rgba(34,197,94,0.08), transparent 60%)",
-        "noise":
-          "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0.04 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>\")"
+        soft: "var(--shadow-soft)",
+        card: "var(--shadow-card)",
+        lift: "var(--shadow-lift)"
       },
       keyframes: {
         pulseDot: {
           "0%, 100%": { opacity: "1", transform: "scale(1)" },
           "50%": { opacity: "0.6", transform: "scale(1.15)" }
         },
-        shimmer: {
-          "0%": { backgroundPosition: "-200% 0" },
-          "100%": { backgroundPosition: "200% 0" }
+        pulseSoft: {
+          "0%, 100%": { opacity: "1" },
+          "50%": { opacity: "0.55" }
         },
         slideUp: {
           "0%": { opacity: "0", transform: "translateY(8px)" },
@@ -71,7 +74,7 @@ const config: Config = {
       },
       animation: {
         pulseDot: "pulseDot 1.8s ease-in-out infinite",
-        shimmer: "shimmer 2.4s linear infinite",
+        pulseSoft: "pulseSoft 1.6s ease-in-out infinite",
         slideUp: "slideUp 0.4s ease-out both"
       }
     }

@@ -254,7 +254,7 @@ export default function DashboardPage() {
       {/* ─────────── TOP BAR ─────────── */}
       <header className="panel mb-5 flex flex-col gap-3 px-4 py-3 sm:px-5 lg:flex-row lg:items-center lg:justify-between">
         <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-gain/30 to-accent-cyan/20 ring-1 ring-gain/30">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gain/10 ring-1 ring-gain/25">
             <Radar className="h-5 w-5 text-gain" />
           </div>
           <div>
@@ -287,7 +287,7 @@ export default function DashboardPage() {
             type="button"
             onClick={() => void runScan()}
             disabled={scanDisabled}
-            className="focus-ring inline-flex h-9 cursor-pointer items-center gap-2 rounded-lg bg-gradient-to-r from-gain to-gain-soft px-4 text-sm font-semibold text-white shadow-glow transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
+            className="focus-ring inline-flex h-9 cursor-pointer items-center gap-2 rounded-lg bg-gain px-4 text-sm font-semibold text-bg-base shadow-soft transition-colors duration-200 hover:bg-gain-soft disabled:cursor-not-allowed disabled:opacity-60"
           >
             <Sparkles className={`h-4 w-4 ${runningScan ? "animate-spin" : ""}`} />
             {runningScan ? "กำลังสแกน..." : "สแกนใหม่"}
@@ -717,7 +717,7 @@ function SurgeCard({
       onClick={onClick}
       className={`focus-ring group relative cursor-pointer overflow-hidden rounded-2xl border p-4 text-left transition ${
         selected
-          ? "border-gain/50 bg-gradient-to-br from-gain/[0.08] to-bg-surface shadow-glow"
+          ? "border-gain/40 bg-gain/[0.07] shadow-lift"
           : "border-bg-line bg-bg-surface hover:border-ink/30 hover:bg-bg-raised"
       }`}
     >
@@ -877,7 +877,7 @@ function SignalDetail({ signal, summary }: { signal: Signal; summary: string }) 
                 </div>
                 <div className="h-1.5 overflow-hidden rounded-full bg-bg-base">
                   <div
-                    className="h-full rounded-full bg-gradient-to-r from-gain to-gain-soft transition-all"
+                    className="h-full rounded-full bg-gain transition-all"
                     style={{ width: `${Math.min(100, (value / max) * 100)}%` }}
                   />
                 </div>

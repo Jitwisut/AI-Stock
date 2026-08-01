@@ -66,12 +66,13 @@ export function Sparkline({
       ? "#EF4444"
       : "#94A3B8";
 
-  const fillStops =
+  // พื้นใต้เส้นเป็นสีทึบโปร่งบาง ๆ ไม่ใช่ไล่สี ให้เข้ากับสไตล์ทั้งเว็บ
+  const areaFill =
     computedTrend === "up"
-      ? { from: "rgba(34,197,94,0.30)", to: "rgba(34,197,94,0)" }
+      ? "rgba(34,197,94,0.14)"
       : computedTrend === "down"
-      ? { from: "rgba(239,68,68,0.28)", to: "rgba(239,68,68,0)" }
-      : { from: "rgba(148,163,184,0.18)", to: "rgba(148,163,184,0)" };
+      ? "rgba(239,68,68,0.14)"
+      : "rgba(148,163,184,0.12)";
 
   const { path, area, lastX, lastY } = useMemo(() => {
     const min = Math.min(...data);
@@ -109,13 +110,7 @@ export function Sparkline({
       role="img"
       aria-label={`sparkline trend ${computedTrend}`}
     >
-      <defs>
-        <linearGradient id={`spark-fill-${id}`} x1="0" x2="0" y1="0" y2="1">
-          <stop offset="0%" stopColor={fillStops.from} />
-          <stop offset="100%" stopColor={fillStops.to} />
-        </linearGradient>
-      </defs>
-      {filled ? <path d={area} fill={`url(#spark-fill-${id})`} /> : null}
+      {filled ? <path d={area} fill={areaFill} /> : null}
       <path
         d={path}
         fill="none"
