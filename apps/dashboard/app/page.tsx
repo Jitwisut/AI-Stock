@@ -721,9 +721,6 @@ function SurgeCard({
           : "border-bg-line bg-bg-surface hover:border-ink/30 hover:bg-bg-raised"
       }`}
     >
-      {/* Decorative glow */}
-      <div className="pointer-events-none absolute -right-8 -top-8 h-24 w-24 rounded-full bg-gain/10 blur-2xl transition group-hover:bg-gain/20" />
-
       <div className="relative">
         <div className="flex items-start justify-between gap-2">
           <div>

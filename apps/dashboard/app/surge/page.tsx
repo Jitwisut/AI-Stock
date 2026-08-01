@@ -74,30 +74,26 @@ type SurgeSignal = {
   created_at?: string | null;
 };
 
-const GRADE_STYLE: Record<string, { ring: string; text: string; bg: string; glow: string }> = {
+const GRADE_STYLE: Record<string, { ring: string; text: string; bg: string }> = {
   fire: {
     ring: "ring-loss/40",
     text: "text-loss",
-    bg: "bg-loss/10",
-    glow: "bg-loss/20"
+    bg: "bg-loss/10"
   },
   strong: {
     ring: "ring-gain/40",
     text: "text-gain",
-    bg: "bg-gain/10",
-    glow: "bg-gain/20"
+    bg: "bg-gain/10"
   },
   watch: {
     ring: "ring-amber/40",
     text: "text-amber",
-    bg: "bg-amber/10",
-    glow: "bg-amber/20"
+    bg: "bg-amber/10"
   },
   caution: {
     ring: "ring-bg-line",
     text: "text-ink-muted",
-    bg: "bg-bg-surface",
-    glow: "bg-ink/5"
+    bg: "bg-bg-surface"
   }
 };
 
@@ -237,7 +233,6 @@ function SurgeRow({ signal, rank }: { signal: SurgeSignal; rank: number }) {
       aria-label={`วิเคราะห์หุ้น ${signal.symbol}`}
       className={`panel group relative block overflow-hidden p-4 ring-1 transition hover:-translate-y-0.5 hover:border-accent-cyan/40 hover:shadow-lift ${style.ring} ${style.bg}`}
     >
-      <div className={`pointer-events-none absolute -right-10 -top-10 h-28 w-28 rounded-full blur-2xl ${style.glow}`} />
 
       <div className="relative">
         {/* Top row */}

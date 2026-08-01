@@ -66,7 +66,7 @@ export function NavBar() {
                 key={link.href}
                 href={link.href}
                 aria-current={active ? "page" : undefined}
-                className={`flex flex-1 cursor-pointer flex-col items-center gap-0.5 py-2.5 text-[10px] font-medium transition-colors duration-200 ${
+                className={`flex flex-1 cursor-pointer flex-col items-center gap-0.5 whitespace-nowrap px-0.5 py-2.5 text-[10px] font-medium transition-colors duration-200 max-[380px]:text-[9px] ${
                   active ? "text-gain" : "text-ink-subtle"
                 }`}
               >
