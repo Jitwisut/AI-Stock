@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+import { delay, fetchJsonWithStatus } from "../../lib/api";
 
 type LongTermBreakdown = {
   trend: number;
@@ -77,13 +77,18 @@ export default function LongTermPage() {
     setError("");
     setLoading(true);
     try {
-      const response = await fetch(`${API_BASE_URL}/signals/longterm?limit=30`, {
-        cache: "no-store"
-      });
-      if (!response.ok) throw new Error("เรียกข้อมูลหุ้นระยะยาวไม่สำเร็จ");
-      const data = (await response.json()) as LongTermPick[];
-      setPicks(data);
-      setSelected((current) => current || data[0]?.symbol || "");
+      // ตอบชุดที่มีทันที แล้วถามซ้ำระหว่างที่เซิร์ฟเวอร์คำนวณชุดใหม่เบื้องหลัง
+      for (let attempt = 0; attempt < 24; attempt++) {
+        const { data, refreshing } = await fetchJsonWithStatus<LongTermPick[]>(
+          "/signals/longterm?limit=30"
+        );
+        if (data.length > 0) {
+          setPicks(data);
+          setSelected((current) => current || data[0]?.symbol || "");
+        }
+        if (!refreshing) break;
+        await delay(5_000);
+      }
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "โหลดไม่สำเร็จ");
     } finally {

@@ -19,7 +19,7 @@ import { useEffect, useMemo, useState } from "react";
 import { DataSourceBadge, Delta } from "../../components/Atoms";
 import { Sparkline } from "../../components/Sparkline";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+import { delay, fetchJsonWithStatus } from "../../lib/api";
 
 type SurgeTarget = { label: string; price: number };
 
@@ -101,19 +101,30 @@ export default function SurgePage() {
   const [signals, setSignals] = useState<SurgeSignal[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [scanning, setScanning] = useState(false);
 
+  /**
+   * เซิร์ฟเวอร์ตอบชุดล่าสุดที่มีทันที แล้วสแกนใหม่เบื้องหลัง (บอกผ่าน header
+   * X-Refreshing) — เดิมหน้านี้ค้างจอเปล่า 35-66 วินาทีเพราะรอสแกนให้จบก่อน
+   */
   async function loadSurge(fresh = false) {
     setError("");
     setLoading(true);
     try {
-      const response = await fetch(`${API_BASE_URL}/signals/surge?limit=50&fresh=${fresh ? "true" : "false"}`, { cache: "no-store" });
-      if (!response.ok) {
-        throw new Error("เรียกข้อมูลหุ้นซิ่งไม่สำเร็จ");
+      for (let attempt = 0; attempt < 24; attempt++) {
+        const wantFresh = attempt === 0 && fresh;
+        const { data, refreshing } = await fetchJsonWithStatus<SurgeSignal[]>(
+          `/signals/surge?limit=50&fresh=${wantFresh ? "true" : "false"}`
+        );
+        if (data.length > 0) setSignals(data);
+        setScanning(refreshing);
+        if (!refreshing) return;
+        await delay(5_000);
       }
-      setSignals((await response.json()) as SurgeSignal[]);
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "โหลดหุ้นซิ่งไม่สำเร็จ");
     } finally {
+      setScanning(false);
       setLoading(false);
     }
   }
@@ -151,11 +162,11 @@ export default function SurgePage() {
         <button
           type="button"
           onClick={() => void loadSurge(true)}
-          disabled={loading}
+          disabled={scanning}
           className="focus-ring inline-flex h-9 cursor-pointer items-center gap-2 self-start rounded-full bg-loss px-4 text-sm font-semibold text-bg-base shadow-soft transition-colors duration-200 hover:bg-loss-soft disabled:cursor-not-allowed disabled:opacity-60 lg:self-auto"
         >
-          <Zap className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-          {loading ? "กำลังสแกน..." : "สแกนซิ่งใหม่"}
+          <Zap className={`h-4 w-4 ${scanning ? "animate-spin" : ""}`} />
+          {scanning ? "กำลังสแกน..." : "สแกนซิ่งใหม่"}
         </button>
       </header>
 

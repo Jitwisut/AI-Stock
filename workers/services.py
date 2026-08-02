@@ -50,6 +50,9 @@ _SURGE_CACHE: dict = {"ts": 0.0, "data": None}
 
 # หุ้นระยะยาวเปลี่ยนช้า + ต้องดึงประวัติ 1 ปีต่อ symbol จึงแคชนานกว่า (6 ชม.)
 _LONGTERM_CACHE: dict = {"ts": 0.0, "data": None}
+
+# ธงกันสั่งรีเฟรชซ้ำซ้อนต่อชนิดข้อมูล (surge / longterm / momentum)
+_REFRESH_FLAGS: dict[str, bool] = {}
 _LONGTERM_TTL_SECONDS = 6 * 60 * 60.0
 
 
@@ -438,14 +441,20 @@ def execute_scan_job(
 
 
 def get_latest_signal_dicts(limit: int = 5) -> list[dict]:
+    """สัญญาณล่าสุดสำหรับแดชบอร์ด — ตอบทันที ไม่รอสแกนสด."""
     settings = get_settings()
+
+    cached = _POOL_CACHE["data"]
+    cache_fresh = bool(cached) and (time.time() - _POOL_CACHE["ts"]) < _POOL_TTL_SECONDS
+    if not cache_fresh:
+        start_background_refresh("momentum", lambda: _serialized_signal_pool(force=True))
+
     rows = latest_signals(settings.database_url, limit=limit)
     if rows:
         return rows
-    if settings.app_env == "production":
-        return []
-    pool = _serialized_signal_pool()
-    return sorted(pool, key=lambda item: item.get("score", 0), reverse=True)[:limit]
+    if cached:
+        return sorted(cached, key=lambda item: item.get("score", 0), reverse=True)[:limit]
+    return []
 
 
 async def _gemini_screen_surge(models: list, limit: int = 10) -> list:
@@ -513,49 +522,67 @@ async def _gemini_screen_surge(models: list, limit: int = 10) -> list:
     return ranked[:limit]
 
 
-def get_surge_signal_dicts(limit: int = 10, *, fresh: bool = False) -> list[dict]:
-    """หุ้น "ซิ่ง" สำหรับสายถือไว-ออกไว — DB-first (เร็ว <1 วิ) fallback สแกนสดเฉพาะ dev.
+def is_refreshing(name: str) -> bool:
+    return bool(_REFRESH_FLAGS.get(name))
 
-    บน production (Vercel + Neon) อ่านจากฐานข้อมูลที่ Celery beat บน Railway
-    สแกนเก็บไว้ตอน 21:45 TH ทุกวัน — ไม่ต้องสแกนสดซึ่งใช้เวลา 30-60 วิ
+
+def start_background_refresh(name: str, worker) -> bool:
+    """สั่งงานรีเฟรชให้ไปทำในเธรดเบื้องหลัง (งานเดียวต่อชนิด).
+
+    การสแกนสดใช้เวลา 30-60 วินาที ซึ่งนานเกินกว่าจะให้ HTTP request รอ — เดิม
+    หน้าหุ้นซิ่งค้างจอเปล่าตลอดช่วงนั้น ตอนนี้ผู้ใช้ได้ข้อมูลชุดที่มีอยู่ทันที
+    แล้วชุดใหม่จะมาแทนเมื่อรีเฟรชเสร็จ
+    """
+    import threading
+
+    if _REFRESH_FLAGS.get(name):
+        return False
+    _REFRESH_FLAGS[name] = True
+
+    def _run() -> None:
+        try:
+            worker()
+        except Exception:
+            logger.warning("background refresh failed: %s", name, exc_info=True)
+        finally:
+            _REFRESH_FLAGS[name] = False
+
+    threading.Thread(target=_run, name=f"refresh-{name}", daemon=True).start()
+    return True
+
+
+def get_surge_signal_dicts(limit: int = 10, *, fresh: bool = False) -> list[dict]:
+    """หุ้น "ซิ่ง" สำหรับสายถือไว-ออกไว — ตอบทันทีเสมอ ไม่รอสแกน.
+
+    ลำดับที่ใช้: แคชในหน่วยความจำ → แถวใน DB → ว่าง
+    ถ้าข้อมูลเก่าหรือผู้ใช้กดสแกนใหม่ จะสั่งสแกนเบื้องหลังแล้วคืนของเดิมไปก่อน
     """
     settings = get_settings()
     from workers.repository import latest_signals_by_kind
 
-    if fresh and settings.surge_allow_live_refresh:
-        refreshed = _try_live_surge_pool(limit, force=True)
-        if refreshed:
-            return refreshed
+    cached = _SURGE_CACHE["data"]
+    cache_age = time.time() - _SURGE_CACHE["ts"]
+    cache_fresh = bool(cached) and cache_age < _POOL_TTL_SECONDS
+
+    if fresh or not cache_fresh:
+        start_background_refresh("surge", lambda: _serialized_surge_pool(force=True))
+
+    if cached:
+        return _decorate_surge_rows(cached)[:limit]
 
     rows = latest_signals_by_kind(settings.database_url, kind="surge", limit=limit)
     if rows:
-        if (
-            settings.surge_allow_live_refresh
-            and _signal_rows_are_stale(rows, settings.surge_db_max_age_minutes)
+        if settings.surge_allow_live_refresh and _signal_rows_are_stale(
+            rows, settings.surge_db_max_age_minutes
         ):
-            refreshed = _try_live_surge_pool(limit, force=True)
-            if refreshed:
-                return refreshed
+            start_background_refresh("surge", lambda: _serialized_surge_pool(force=True))
         return rows[:limit]
 
-    # Fallback: สแกนสดเมื่อไม่มี DB หรือผู้ใช้เปิด live refresh.
-    if settings.app_env != "production" or settings.surge_allow_live_refresh:
-        return _try_live_surge_pool(limit, force=False)
     return []
 
 
-def _try_live_surge_pool(limit: int, *, force: bool) -> list[dict]:
-    try:
-        return _surge_pool_fallback(limit, force=force)
-    except Exception:
-        logger.warning("live surge fallback failed", exc_info=True)
-        return []
-
-
-def _surge_pool_fallback(limit: int, *, force: bool = False) -> list[dict]:
-    """สแกนสด surge pool (ใช้ตอน dev หรือไม่มี DB)."""
-    pool = _serialized_surge_pool(force=force)
-
+def _decorate_surge_rows(pool: list[dict]) -> list[dict]:
+    """เติมคะแนน/เกรด/แผนเทรด แล้วเรียงตามเกรด (เหมือนเดิมทุกประการ)."""
     enriched: list[dict] = []
     for row in pool:
         item = dict(row)
@@ -573,7 +600,20 @@ def _surge_pool_fallback(limit: int, *, force: bool = False) -> list[dict]:
             -item.get("surge_score", 0),
         )
     )
-    return enriched[:limit]
+    return enriched
+
+
+def _try_live_surge_pool(limit: int, *, force: bool) -> list[dict]:
+    try:
+        return _surge_pool_fallback(limit, force=force)
+    except Exception:
+        logger.warning("live surge fallback failed", exc_info=True)
+        return []
+
+
+def _surge_pool_fallback(limit: int, *, force: bool = False) -> list[dict]:
+    """สแกนสด surge pool (ใช้ตอน dev หรือไม่มี DB)."""
+    return _decorate_surge_rows(_serialized_surge_pool(force=force))[:limit]
 
 
 def _longterm_pool(force: bool = False) -> list[dict]:
@@ -631,9 +671,14 @@ def get_longterm_signal_dicts(limit: int = 10) -> list[dict]:
     if cached:
         return cached[:limit]
 
-    # Last resort: scan สด (เฉพาะ dev/staging)
-    if settings.app_env != "production":
-        return _longterm_pool()[:limit]
+    # แคชในหน่วยความจำจากรอบก่อน (ยังไม่หมดอายุ 6 ชม.)
+    memory = _LONGTERM_CACHE["data"]
+    if memory:
+        return memory[:limit]
+
+    # ไม่มีข้อมูลเลย → สั่งคำนวณเบื้องหลังแล้วคืนว่างไปก่อน หน้าเว็บจะถามซ้ำเอง
+    # (ดึงประวัติ 1 ปีของหุ้นทั้งชุดใช้เวลาหลายสิบวินาที นานเกินกว่าจะให้ request รอ)
+    start_background_refresh("longterm", lambda: _longterm_pool(force=True))
     return []
 
 

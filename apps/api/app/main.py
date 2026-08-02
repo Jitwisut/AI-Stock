@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 logger = logging.getLogger(__name__)
@@ -122,6 +122,21 @@ async def _on_startup() -> None:
                 logger.warning("daily picks warm-up failed: %s", exc)
 
         asyncio.create_task(_warm_picks())
+
+        # อุ่นชุดหุ้นซิ่ง/ระยะยาวไปพร้อมกัน — ทั้งสองหน้าเคยต้องรอสแกนสด 35-66 วินาที
+        # ตอนมีคนเปิดหน้าครั้งแรก
+        async def _warm_pools() -> None:
+            from workers.services import (
+                _longterm_pool,
+                _serialized_surge_pool,
+                start_background_refresh,
+            )
+
+            start_background_refresh("surge", lambda: _serialized_surge_pool(force=True))
+            await asyncio.sleep(45)  # เว้นระยะไม่ให้ยิง provider พร้อมกันจนโดน rate limit
+            start_background_refresh("longterm", lambda: _longterm_pool(force=True))
+
+        asyncio.create_task(_warm_pools())
 
     if settings.app_env != "production" or not settings.send_telegram:
         return
@@ -339,17 +354,33 @@ def latest_signals(limit: int = Query(default=5, ge=1, le=20)) -> list[dict]:
 
 @app.get("/signals/surge", response_model=list[SignalOut])
 def surge_signals(
+    response: Response,
     limit: int = Query(default=50, ge=1, le=100),
     fresh: bool = Query(default=False),
 ) -> list[dict]:
-    """หุ้นซิ่งสำหรับสายถือไว-ออกไว เรียงตาม surge_score (สแกนสด)."""
-    return get_surge_signal_dicts(limit=limit, fresh=fresh)
+    """หุ้นซิ่งสำหรับสายถือไว-ออกไว เรียงตาม surge_score.
+
+    ตอบทันทีด้วยชุดล่าสุดที่มี ถ้าข้อมูลเก่าหรือขอ fresh จะสแกนเบื้องหลังให้
+    หน้าเว็บดูจาก header X-Refreshing ว่าควรถามซ้ำอีกไหม
+    """
+    from workers.services import is_refreshing
+
+    rows = get_surge_signal_dicts(limit=limit, fresh=fresh)
+    response.headers["X-Refreshing"] = "1" if is_refreshing("surge") else "0"
+    return rows
 
 
 @app.get("/signals/longterm", response_model=list[LongTermOut])
-def longterm_signals(limit: int = Query(default=15, ge=1, le=50)) -> list[dict]:
+def longterm_signals(
+    response: Response,
+    limit: int = Query(default=15, ge=1, le=50),
+) -> list[dict]:
     """หุ้นน่าสนใจสำหรับลงทุนระยะยาว จัดอันดับตามคะแนนเทรนด์ (แคช 6 ชม.)."""
-    return get_longterm_signal_dicts(limit=limit)
+    from workers.services import is_refreshing
+
+    rows = get_longterm_signal_dicts(limit=limit)
+    response.headers["X-Refreshing"] = "1" if is_refreshing("longterm") else "0"
+    return rows
 
 
 @app.post("/alerts/check")

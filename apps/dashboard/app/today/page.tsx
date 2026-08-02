@@ -12,7 +12,7 @@ import {
 import { useEffect, useMemo, useState } from "react";
 
 import { GaugeRing } from "../../components/GaugeRing";
-import { PriceVolumeChart, type Bar } from "../../components/PriceVolumeChart";
+import { PriceVolumeChart, hasOhlcData, type Bar } from "../../components/PriceVolumeChart";
 import { delay, fetchJson } from "../../lib/api";
 
 type PickNews = {
@@ -110,6 +110,7 @@ export default function TodayPage() {
   const [error, setError] = useState("");
   const [building, setBuilding] = useState(false);
   const [selected, setSelected] = useState<string>("");
+  const [chartMode, setChartMode] = useState<"area" | "candle">("area");
 
   /**
    * เซิร์ฟเวอร์ตอบทันทีเสมอ ถ้ายังคำนวณไม่เสร็จจะได้ status="building"
@@ -302,15 +303,47 @@ export default function TodayPage() {
                 {/* ขวา: กราฟราคา + วอลุ่ม แล้วต่อด้วยตัวเลขสำคัญ */}
                 <div className="flex flex-col gap-4">
                   <div className="rounded-2xl border border-bg-line bg-bg-base/40 p-4">
-                    <div className="mb-2 flex items-baseline justify-between">
-                      <h2 className="text-xs font-medium text-ink-muted">
-                        ราคาปิด 60 วันทำการล่าสุด
-                      </h2>
-                      <span className="text-[10px] text-ink-subtle">
-                        แท่งด้านล่างคือวอลุ่มวันเดียวกัน
-                      </span>
+                    <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <h2 className="text-xs font-medium text-ink-muted">
+                          ราคาปิด 60 วันทำการล่าสุด
+                        </h2>
+                        <span className="text-[10px] text-ink-subtle">
+                          แท่งด้านล่างคือวอลุ่มวันเดียวกัน
+                        </span>
+                      </div>
+                      <div
+                        role="group"
+                        aria-label="รูปแบบกราฟ"
+                        className="inline-flex overflow-hidden rounded-lg border border-bg-line"
+                      >
+                        {(["area", "candle"] as const).map((option) => {
+                          const disabled =
+                            option === "candle" && !hasOhlcData(active.bars ?? []);
+                          const selectedMode = chartMode === option;
+                          return (
+                            <button
+                              key={option}
+                              type="button"
+                              onClick={() => setChartMode(option)}
+                              disabled={disabled}
+                              aria-pressed={selectedMode}
+                              title={
+                                disabled ? "แหล่งข้อมูลนี้ไม่มีราคาเปิด/สูง/ต่ำ" : undefined
+                              }
+                              className={`cursor-pointer px-3 py-1.5 text-[11px] font-medium transition-colors duration-200 disabled:cursor-not-allowed disabled:opacity-40 ${
+                                selectedMode
+                                  ? "bg-bg-raised text-ink"
+                                  : "text-ink-subtle hover:text-ink"
+                              }`}
+                            >
+                              {option === "area" ? "พื้นที่" : "แท่งเทียน"}
+                            </button>
+                          );
+                        })}
+                      </div>
                     </div>
-                    <PriceVolumeChart bars={active.bars ?? []} height={200} />
+                    <PriceVolumeChart bars={active.bars ?? []} height={200} mode={chartMode} />
                   </div>
 
                   <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">

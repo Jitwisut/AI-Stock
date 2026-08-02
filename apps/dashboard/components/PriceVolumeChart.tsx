@@ -25,7 +25,18 @@ type Props = {
   height?: number;
   volumeHeight?: number;
   className?: string;
+  /** โหมดที่หน้าเพจควบคุม — ปุ่มสลับอยู่นอกกราฟ (ดูหัวการ์ด) */
+  mode?: ChartMode;
 };
+
+/** ใช้ตรวจจากฝั่งหน้าเพจว่าเปิดโหมดแท่งเทียนได้ไหม ก่อนจะโชว์ปุ่ม */
+export function hasOhlcData(bars: Bar[]): boolean {
+  const points = bars.filter((bar) => bar.close > 0);
+  return (
+    points.length > 1 &&
+    points.every((bar) => bar.open != null && bar.high != null && bar.low != null)
+  );
+}
 
 const PAD_X = 4;
 const PAD_Y = 8;
@@ -47,10 +58,10 @@ export function PriceVolumeChart({
   bars,
   height = 190,
   volumeHeight = 54,
-  className
+  className,
+  mode = "area"
 }: Props) {
   const [hover, setHover] = useState<number | null>(null);
-  const [mode, setMode] = useState<ChartMode>("area");
   const wrapRef = useRef<HTMLDivElement>(null);
 
   const points = useMemo(() => bars.filter((bar) => bar.close > 0), [bars]);
@@ -141,29 +152,6 @@ export function PriceVolumeChart({
           {changePercent.toFixed(1)}%
         </span>
         <span className="text-[10px] text-ink-subtle">ในช่วง {points.length} วันทำการ</span>
-
-        {/* สลับรูปแบบกราฟ — ปิดโหมดแท่งเทียนเมื่อแหล่งข้อมูลไม่มี OHLC ครบ */}
-        <div className="ml-auto inline-flex overflow-hidden rounded-lg border border-bg-line">
-          {(["area", "candle"] as const).map((option) => {
-            const disabled = option === "candle" && !hasOhlc;
-            const selected = mode === option;
-            return (
-              <button
-                key={option}
-                type="button"
-                onClick={() => setMode(option)}
-                disabled={disabled}
-                aria-pressed={selected}
-                title={disabled ? "แหล่งข้อมูลนี้ไม่มีราคาเปิด/สูง/ต่ำ" : undefined}
-                className={`cursor-pointer px-2 py-0.5 text-[10px] font-medium transition-colors duration-200 disabled:cursor-not-allowed disabled:opacity-40 ${
-                  selected ? "bg-bg-raised text-ink" : "text-ink-subtle hover:text-ink"
-                }`}
-              >
-                {option === "area" ? "พื้นที่" : "แท่งเทียน"}
-              </button>
-            );
-          })}
-        </div>
       </div>
       {/* แผงราคา */}
       <svg

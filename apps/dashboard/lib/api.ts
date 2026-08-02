@@ -54,3 +54,51 @@ export async function fetchJson<T>(
 export function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+/**
+ * เหมือน fetchJson แต่คืนสถานะจาก header X-Refreshing มาด้วย
+ * เซิร์ฟเวอร์ใช้บอกว่า "ข้อมูลชุดนี้ใช้ได้ แต่กำลังสแกนชุดใหม่อยู่เบื้องหลัง"
+ * หน้าเว็บจึงถามซ้ำเป็นระยะแทนการค้างรอสแกนให้จบในคำขอเดียว
+ */
+export async function fetchJsonWithStatus<T>(
+  path: string,
+  options: { retries?: number; timeoutMs?: number } = {}
+): Promise<{ data: T; refreshing: boolean }> {
+  const { retries = 2, timeoutMs = 30_000 } = options;
+  let lastError: Error = new Error("เรียก API ไม่สำเร็จ");
+
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(`${API_BASE_URL}${path}`, {
+        cache: "no-store",
+        signal: controller.signal
+      });
+      if (!response.ok) {
+        if (response.status >= 500 && attempt < retries) {
+          lastError = new Error(`เซิร์ฟเวอร์ตอบ ${response.status}`);
+          await delay(1500 * (attempt + 1));
+          continue;
+        }
+        throw new Error(`เรียก API ไม่สำเร็จ (${response.status})`);
+      }
+      return {
+        data: (await response.json()) as T,
+        refreshing: response.headers.get("X-Refreshing") === "1"
+      };
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error("เรียก API ไม่สำเร็จ");
+      if (attempt >= retries) {
+        throw lastError.name === "AbortError"
+          ? new Error("เซิร์ฟเวอร์ไม่ตอบสนอง ลองใหม่อีกครั้ง")
+          : lastError;
+      }
+      await delay(1500 * (attempt + 1));
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  throw lastError;
+}
