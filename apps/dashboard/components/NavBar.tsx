@@ -1,6 +1,6 @@
 "use client";
 
-import { BrainCircuit, Flame, LineChart, ListOrdered, Radar, Sparkles } from "lucide-react";
+import { BrainCircuit, Flame, LineChart, ListOrdered, Radar, ScanSearch, Sparkles } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
@@ -8,6 +8,7 @@ import { ThemeToggle } from "./ThemeToggle";
 
 const LINKS = [
   { href: "/", label: "แดชบอร์ด", short: "หลัก", icon: Radar },
+  { href: "/discover", label: "AI Discovery", short: "ค้นหา", icon: ScanSearch },
   { href: "/today", label: "น่าสนใจวันนี้", short: "วันนี้", icon: Sparkles },
   { href: "/analyze", label: "วิเคราะห์หุ้น", short: "วิเคราะห์", icon: BrainCircuit },
   { href: "/surge", label: "หุ้นซิ่ง", short: "ซิ่ง", icon: Flame },

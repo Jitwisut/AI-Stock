@@ -409,8 +409,21 @@ def test_nasdaq_quote_mapping_uses_provider_timestamp() -> None:
     assert snapshot.symbol == "CLRO"
     assert snapshot.latest_price == 6.48
     assert round(snapshot.premarket_gap_percent, 2) == 101.24
-    assert snapshot.updated_at.isoformat() == "2026-07-01T21:00:00+00:00"
+    # 16:00 ET ในเดือนกรกฎาคม (EDT, UTC-4) = 20:00 UTC
+    assert snapshot.updated_at.isoformat() == "2026-07-01T20:00:00+00:00"
     assert snapshot.data_source == "nasdaq_quote_delayed"
+    # endpoint นี้ไม่มีฐานวอลุ่ม/high ย้อนหลัง → ต้องเป็น "ไม่ทราบ" ไม่ใช่ค่าเดา
+    assert snapshot.average_volume_20d == 0
+    assert snapshot.prior_high == 0
+    assert snapshot.relative_volume == 0.0
+
+
+def test_nasdaq_quote_intraday_timestamp_is_eastern_time() -> None:
+    snapshot = _nasdaq_quote_primary_data_to_market_snapshot(
+        "AAPL",
+        {"lastSalePrice": "$335.80", "percentageChange": "-0.35%", "volume": "1,000", "lastTradeTimestamp": "Sep 18, 2026 2:32 PM ET"},
+    )
+    assert snapshot.updated_at.isoformat() == "2026-09-18T18:32:00+00:00"
 
 
 def test_yahoo_quote_mapping_prefers_extended_hours_price() -> None:

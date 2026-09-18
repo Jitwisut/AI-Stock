@@ -27,6 +27,8 @@ type Props = {
   className?: string;
   /** โหมดที่หน้าเพจควบคุม — ปุ่มสลับอยู่นอกกราฟ (ดูหัวการ์ด) */
   mode?: ChartMode;
+  /** ข้อความช่วงเวลาแทน "ในช่วง N วันทำการ" (เช่นกราฟ intraday รายนาที) */
+  periodLabel?: string;
 };
 
 /** ใช้ตรวจจากฝั่งหน้าเพจว่าเปิดโหมดแท่งเทียนได้ไหม ก่อนจะโชว์ปุ่ม */
@@ -59,7 +61,8 @@ export function PriceVolumeChart({
   height = 190,
   volumeHeight = 54,
   className,
-  mode = "area"
+  mode = "area",
+  periodLabel
 }: Props) {
   const [hover, setHover] = useState<number | null>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -151,7 +154,7 @@ export function PriceVolumeChart({
           {up ? "▲" : "▼"} {changePercent >= 0 ? "+" : ""}
           {changePercent.toFixed(1)}%
         </span>
-        <span className="text-[10px] text-ink-subtle">ในช่วง {points.length} วันทำการ</span>
+        <span className="text-[10px] text-ink-subtle">{periodLabel ?? `ในช่วง ${points.length} วันทำการ`}</span>
       </div>
       {/* แผงราคา */}
       <svg

@@ -36,7 +36,7 @@ services:
       - key: BACKEND_CORS_ORIGINS
         value: "*"
       - key: UNIVERSE_MODE
-        value: default
+        value: all
       - key: SCAN_UNIVERSE_LIMIT
         value: "0"
       - key: AI_PROVIDER

@@ -186,6 +186,10 @@ def scan_market(
         selected_candidates.sort(key=lambda item: item[2], reverse=True)
         selected_candidates = selected_candidates[:candidate_limit]
 
+    # เติมฐานวอลุ่มเฉลี่ย 20 วัน + high 20 วันก่อนหน้าจากแท่งราคาจริง แล้วจัดลำดับใหม่
+    selected_candidates = _enrich_with_history(selected_candidates)
+    selected_candidates.sort(key=lambda item: item[2], reverse=True)
+
     news_by_symbol: dict[str, list] = {}
     if include_news:
         news_candidates = selected_candidates
@@ -1096,10 +1100,64 @@ def _merge_realtime_snapshot(original: MarketSnapshot, fresh: MarketSnapshot) ->
         day_high=max(original.day_high, fresh.day_high, latest_price),
         prior_high=original.prior_high if original.prior_high > 0 else fresh.prior_high,
         volume=volume,
-        average_volume_20d=max(1, average_volume),
+        average_volume_20d=average_volume,  # 0 = ไม่ทราบ (ห้าม max(1, ...) → relvol เพี้ยนเป็นหลักล้าน)
         updated_at=fresh.updated_at,
         data_source=fresh.data_source,
     )
+
+
+def _enrich_with_history(
+    candidates: list[tuple[Stock, MarketSnapshot, float]],
+) -> list[tuple[Stock, MarketSnapshot, float]]:
+    """แทนค่าที่ quote/screener ไม่มี (avg volume 20D, prior 20D high) ด้วยค่าจากแท่งราคาจริง.
+
+    ใช้เฉพาะแท่งที่ "ก่อน" session ของ snapshot เพื่อไม่ให้วันนี้ไปปนฐานของตัวเอง
+    ตัวที่ดึงประวัติไม่ได้คงค่า 0 (= ไม่ทราบ) ไว้ — scoring จะไม่ให้คะแนนส่วนนั้น
+    """
+    if not candidates:
+        return candidates
+    from zoneinfo import ZoneInfo
+
+    from workers.engine.bars import get_daily_bars
+
+    ny = ZoneInfo("America/New_York")
+    settings = get_settings()
+    series_by_symbol: dict[str, object] = {}
+    with ThreadPoolExecutor(max_workers=max(1, min(settings.scan_workers, 8))) as executor:
+        futures = {executor.submit(get_daily_bars, stock.symbol): stock.symbol for stock, _s, _c in candidates}
+        for future in as_completed(futures):
+            try:
+                series_by_symbol[futures[future]] = future.result()
+            except Exception:
+                continue
+
+    enriched: list[tuple[Stock, MarketSnapshot, float]] = []
+    for stock, snapshot, score in candidates:
+        series = series_by_symbol.get(stock.symbol)
+        if series is None:
+            enriched.append((stock, snapshot, score))
+            continue
+        session_day = snapshot.updated_at.astimezone(ny).date()
+        prior = [bar for bar in series.bars if bar.day < session_day][-20:]
+        volumes = [bar.volume for bar in prior if bar.volume]
+        highs = [bar.high for bar in prior if bar.high]
+        if len(volumes) < 15 or not highs:
+            enriched.append((stock, snapshot, score))
+            continue
+        updated = MarketSnapshot(
+            symbol=snapshot.symbol,
+            previous_close=snapshot.previous_close,
+            latest_price=snapshot.latest_price,
+            premarket_price=snapshot.premarket_price,
+            day_high=snapshot.day_high,
+            prior_high=max(highs),
+            volume=snapshot.volume,
+            average_volume_20d=int(sum(volumes) / len(volumes)),
+            updated_at=snapshot.updated_at,
+            data_source=f"{snapshot.data_source}+nasdaq_historical_baseline",
+        )
+        enriched.append((stock, updated, _price_candidate_score(updated)))
+    return enriched
 
 
 def _signal_rows_are_stale(rows: list[dict], max_age_minutes: int) -> bool:

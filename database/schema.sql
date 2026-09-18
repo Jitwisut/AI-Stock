@@ -153,3 +153,52 @@ CREATE TABLE IF NOT EXISTS bot_portfolio (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE (chat_id, symbol)
 );
+
+-- ---------------------------------------------------------------------------
+-- Discovery engine (workers/engine) — ผลสแกนแบบ snapshot + แคชแท่งราคารายวัน
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS discovery_runs (
+    id BIGSERIAL PRIMARY KEY,
+    market TEXT NOT NULL,
+    strategy TEXT NOT NULL,
+    params JSONB NOT NULL DEFAULT '{}'::jsonb,
+    status TEXT NOT NULL,
+    as_of_session DATE,
+    funnel JSONB,
+    market_context JSONB,
+    results JSONB,
+    error TEXT,
+    started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    finished_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_discovery_runs_lookup
+    ON discovery_runs (market, strategy, started_at DESC);
+
+-- แท่งราคารายวันเปลี่ยนวันละครั้ง เก็บไว้กันต้องดึงใหม่ทั้งชุดทุกครั้งที่เซิร์ฟเวอร์ตื่น
+CREATE TABLE IF NOT EXISTS bar_cache (
+    symbol TEXT PRIMARY KEY,
+    last_bar_date DATE NOT NULL,
+    bars JSONB NOT NULL,
+    source TEXT NOT NULL,
+    fetched_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS backtest_runs (
+    id BIGSERIAL PRIMARY KEY,
+    status TEXT NOT NULL,
+    params JSONB NOT NULL DEFAULT '{}'::jsonb,
+    results JSONB,
+    error TEXT,
+    started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    finished_at TIMESTAMPTZ
+);
+
+-- คำอธิบายจาก AI แคชตาม snapshot ของข้อมูล (hash ของ input) — ข้อมูลเดิม = ไม่เรียก LLM ซ้ำ
+CREATE TABLE IF NOT EXISTS ai_analysis_cache (
+    input_hash TEXT PRIMARY KEY,
+    symbol TEXT NOT NULL,
+    model TEXT,
+    output JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);

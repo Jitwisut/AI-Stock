@@ -193,8 +193,16 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="AI Momentum Stock Radar", version="0.1.0", lifespan=lifespan)
+from workers.engine.logging_setup import configure_logging  # noqa: E402
+
+configure_logging()
+
+app = FastAPI(title="AI Momentum Stock Radar", version="0.2.0", lifespan=lifespan)
 settings = get_settings()
+
+from apps.api.app.engine_routes import router as engine_router  # noqa: E402
+
+app.include_router(engine_router)
 
 @app.middleware("http")
 async def _json_errors(request, call_next):

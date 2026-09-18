@@ -448,6 +448,14 @@ class NasdaqQuoteMarketDataProvider(MarketDataProvider):
 
     name = "nasdaq_quote"
     info_url = "https://api.nasdaq.com/api/quote/{symbol}/info"
+    bulk_threshold = 200
+
+    def get_snapshots(self, symbols: list[str]) -> dict[str, MarketSnapshot]:
+        # ยิงทีละ symbol เหมาะกับรายชื่อสั้น ๆ เท่านั้น — ทั้งตลาด (~6,000 ตัว) จะใช้เวลา 10+ นาที
+        # คืนว่างเพื่อให้ provider ถัดไป (Nasdaq bulk screener, 1 request) รับไปทำแทน
+        if len(symbols) >= self.bulk_threshold:
+            return {}
+        return super().get_snapshots(symbols)
 
     def get_snapshot(self, symbol: str) -> MarketSnapshot:
         payload = fetch_nasdaq_json(
@@ -593,10 +601,13 @@ def _nasdaq_quote_primary_data_to_market_snapshot(
         previous_close=previous_close,
         latest_price=latest_price,
         premarket_price=latest_price,
-        day_high=max(latest_price, previous_close),
-        prior_high=previous_close,
+        # endpoint นี้ไม่มี high ของวัน / high ย้อนหลัง / วอลุ่มเฉลี่ย — เดิมใส่ค่าเดา
+        # (avg volume = volume วันนี้ → relative volume = 1.0 ทุกตัว, prior high = previous close
+        # → "breakout" ทุกวันที่ราคาบวก) ตอนนี้ใส่ 0 = ไม่ทราบ แล้วเติมจากแท่งราคาจริงภายหลัง
+        day_high=latest_price,
+        prior_high=0.0,
         volume=volume,
-        average_volume_20d=max(1, volume),
+        average_volume_20d=0,
         updated_at=updated_at,
         data_source=data_source,
     )
@@ -611,11 +622,14 @@ def _parse_nasdaq_quote_timestamp(value) -> datetime:
             parsed = datetime.strptime(cleaned, fmt)
         except ValueError:
             continue
+        from zoneinfo import ZoneInfo
+
         if fmt == "%b %d, %Y":
-            # Nasdaq sometimes provides date only; use an approximate US close
-            # time so stale-date comparisons are honest instead of "now".
-            parsed = parsed.replace(hour=21, minute=0)
-        return parsed.replace(tzinfo=timezone.utc)
+            # Nasdaq sometimes provides date only; use the US close so stale-date
+            # comparisons are honest instead of "now".
+            parsed = parsed.replace(hour=16, minute=0)
+        # Nasdaq ระบุเวลาเป็น ET (มี DST) — เดิมถือเป็น UTC ทำให้เวลาคลาด 4-5 ชั่วโมง
+        return parsed.replace(tzinfo=ZoneInfo("America/New_York")).astimezone(timezone.utc)
     return datetime.now(timezone.utc)
 
 
@@ -750,10 +764,12 @@ def _nasdaq_screener_row_to_market_snapshot(row: dict) -> MarketSnapshot:
         previous_close=previous_close,
         latest_price=latest_price,
         premarket_price=latest_price,
-        day_high=max(latest_price, previous_close),
-        prior_high=previous_close,
+        # screener ไม่มี high/วอลุ่มเฉลี่ย — 0 = ไม่ทราบ (ห้ามเดา ดูคอมเมนต์ใน quote snapshot)
+        day_high=latest_price,
+        prior_high=0.0,
         volume=volume,
-        average_volume_20d=max(1, volume),
+        average_volume_20d=0,
+        # screener ไม่บอกเวลาของราคา — ใช้เวลาที่ดึง และระบุ data_source ให้รู้ว่าเป็น snapshot
         updated_at=datetime.now(timezone.utc),
         data_source=NasdaqScreenerMarketDataProvider.name,
     )

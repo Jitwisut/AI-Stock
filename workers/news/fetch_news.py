@@ -120,9 +120,18 @@ class FallbackNewsProvider(NewsProvider):
             return self.fallback.get_company_news(symbol)
 
 
+class EmptyNewsProvider(NewsProvider):
+    """ใช้เมื่อแหล่งข่าวจริงล่ม — คืนรายการว่าง ห้ามสร้างข่าวแทน."""
+
+    def get_company_news(self, symbol: str) -> list[NewsItem]:
+        return []
+
+
 def get_news_provider(use_live_data: bool = False) -> NewsProvider:
     if use_live_data:
-        return FallbackNewsProvider(GoogleNewsRssProvider(), MockNewsProvider())
+        # เดิม fallback เป็น MockNewsProvider ซึ่งสร้างหัวข่าวปลอม + sentiment 0.65
+        # แล้วไปดันคะแนน catalyst ทุกครั้งที่ Google News ล่ม — ห้ามใช้ข้อมูลปลอมใน live mode
+        return FallbackNewsProvider(GoogleNewsRssProvider(), EmptyNewsProvider())
     return MockNewsProvider()
 
 

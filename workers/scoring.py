@@ -23,7 +23,10 @@ def risk_score(stock: Stock, snapshot: MarketSnapshot) -> tuple[float, list[str]
     score = 10.0
     risks: list[str] = []
 
-    if snapshot.relative_volume < 1.5:
+    if snapshot.average_volume_20d <= 0:
+        score -= 4
+        risks.append("ไม่มีข้อมูลวอลุ่มเฉลี่ย 20 วันให้เทียบ — ยืนยันแรงซื้อไม่ได้")
+    elif snapshot.relative_volume < 1.5:
         score -= 4
         risks.append("relative volume ยังไม่สูงพอ")
     if snapshot.premarket_gap_percent > 15:
@@ -58,7 +61,7 @@ def build_signal(stock: Stock, snapshot: MarketSnapshot, news_items: list[NewsIt
     catalyst_text = news_items[0].title if news_items else "ยังไม่พบข่าว catalyst ชัดเจน"
     reason_parts = [
         f"ราคาเปลี่ยนแปลงล่าสุด {snapshot.premarket_gap_percent:.1f}%",
-        f"relative volume {snapshot.relative_volume:.1f}x",
+        f"relative volume {snapshot.relative_volume:.1f}x" if snapshot.average_volume_20d > 0 else "relative volume: N/A",
     ]
     if breakout:
         reason_parts.append("ราคาทะลุแนวต้านระยะสั้น")
