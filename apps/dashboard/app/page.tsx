@@ -30,7 +30,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { DataSourceBadge, Delta, ScoreBadge } from "../components/Atoms";
 import { Sparkline } from "../components/Sparkline";
-import { API_BASE_URL, fetchJson } from "../lib/api";
+import { API_BASE_URL, delay, fetchJson } from "../lib/api";
 const ADMIN_API_KEY = process.env.NEXT_PUBLIC_ADMIN_API_KEY ?? "";
 
 type ScoreBreakdown = {
@@ -95,22 +95,15 @@ type SettingsStatus = {
   ai_candidate_limit: number;
 };
 
-type ScanResult = {
-  signals: Signal[];
-  summary: string;
-  telegram_status: string;
-  saved_signal_count: number;
-  scanned_symbol_count: number;
-  universe_symbol_count: number;
-  failed_symbol_count: number;
-  candidate_symbol_count: number;
-};
-
 type ScanRunStatus = {
   id: number;
   kind: string;
   status: string;
   provider: string;
+  universe_count?: number;
+  scanned_count?: number;
+  failed_count?: number;
+  error?: string | null;
 };
 
 type Stock = {
@@ -202,36 +195,71 @@ export default function DashboardPage() {
     setLoading(false);
   }
 
+  /**
+   * สั่งสแกนแล้วถามสถานะเป็นระยะ — เซิร์ฟเวอร์ตอบ queued ทันที แล้วสแกนต่อเบื้องหลัง
+   * (เดิมรอสแกนจบใน request เดียว 60+ วินาที ถ้าเกิน timeout ของ proxy
+   * การเชื่อมต่อจะถูกตัดและ Safari แสดง "Load failed")
+   */
   async function runScan() {
     setRunningScan(true);
     setError("");
     try {
       const headers: HeadersInit = ADMIN_API_KEY ? { "X-Admin-API-Key": ADMIN_API_KEY } : {};
-      const response = await fetch(`${API_BASE_URL}/scan/run?kind=momentum`, {
-        method: "POST",
-        headers,
-        signal: AbortSignal.timeout(180_000)
-      });
-      if (!response.ok) {
-        throw new Error("รันสแกนไม่สำเร็จ");
+      let response: Response | null = null;
+      // เซิร์ฟเวอร์ฟรีอาจกำลังตื่น — ลองซ้ำเมื่อ network error หรือ 5xx
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          response = await fetch(`${API_BASE_URL}/scan/run?kind=momentum`, {
+            method: "POST",
+            headers,
+            signal: AbortSignal.timeout(60_000)
+          });
+          if (response.status < 500) break;
+        } catch (networkError) {
+          if (attempt === 2) throw networkError;
+        }
+        await delay(2000 * (attempt + 1));
       }
-      const payload = (await response.json()) as ScanResult | ScanRunStatus;
-      if ("status" in payload && "id" in payload && !("signals" in payload)) {
-        setSummary(`ส่งงานสแกนเข้าคิวแล้ว (#${payload.id}) สถานะ ${payload.status}`);
-        await loadDashboard();
-        return;
+      if (!response || !response.ok) {
+        let detail = "";
+        try {
+          detail = ((await response?.json()) as { detail?: string })?.detail ?? "";
+        } catch {
+          // body ไม่ใช่ JSON
+        }
+        throw new Error(`เริ่มสแกนไม่สำเร็จ (${response?.status ?? "network"}) ${detail}`.trim());
       }
-      const result = payload as ScanResult;
-      setSignals(result.signals);
-      setSummary(result.summary);
-      setScanMeta({
-        scanned: result.scanned_symbol_count,
-        universe: result.universe_symbol_count,
-        candidates: result.candidate_symbol_count,
-        failed: result.failed_symbol_count
-      });
-      setSelectedSymbol(result.signals[0]?.symbol || "");
-      await loadStatus();
+
+      let run = (await response.json()) as ScanRunStatus;
+      const startedAt = Date.now();
+      // ถามทุก 3 วินาที สูงสุด 10 นาที (สแกนทั้งตลาดใช้เวลาหลายนาทีบนเซิร์ฟเวอร์ฟรี)
+      while (run.status === "queued" || run.status === "running") {
+        setSummary(
+          `กำลังสแกน (#${run.id}) — ${run.status === "queued" ? "รอคิว" : "กำลังดึงข้อมูลและคำนวณ"} ` +
+            `${Math.round((Date.now() - startedAt) / 1000)} วินาที`
+        );
+        if (Date.now() - startedAt > 10 * 60_000) {
+          throw new Error(`สแกน #${run.id} ใช้เวลานานผิดปกติ ลองกดโหลดใหม่ภายหลัง`);
+        }
+        await delay(3000);
+        try {
+          run = await fetchJson<ScanRunStatus>(`/scan/runs/${run.id}`, { retries: 1, timeoutMs: 20_000 });
+        } catch {
+          // พลาดรอบเดียวไม่เป็นไร ถามใหม่รอบหน้า
+        }
+      }
+
+      if (run.status !== "completed") {
+        throw new Error(`สแกนไม่สำเร็จ: ${run.error ?? run.status}`);
+      }
+      setScanMeta((current) => ({
+        ...current,
+        scanned: run.scanned_count ?? current.scanned,
+        universe: run.universe_count ?? current.universe,
+        failed: run.failed_count ?? current.failed
+      }));
+      setSummary(`สแกนเสร็จ (#${run.id}) — ตรวจ ${run.scanned_count ?? 0} ตัว`);
+      await loadDashboard();
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "รันสแกนไม่สำเร็จ");
     } finally {

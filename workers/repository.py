@@ -189,6 +189,33 @@ def latest_scan_run(database_url: str, kind: str | None = None) -> dict | None:
         return _handle_repository_error("latest scan run query failed", exc, None)
 
 
+def fail_stale_scan_runs(database_url: str, older_than_minutes: int = 20) -> int:
+    """ปิดงานสแกนที่ค้าง queued/running นานผิดปกติ (เช่นเซิร์ฟเวอร์รีสตาร์ทกลางงาน).
+
+    ถ้าไม่ปิด หน้าเว็บจะเห็นสถานะ "queued" ไปตลอดและรอผลที่ไม่มีวันมา
+    """
+    try:
+        from sqlalchemy import text
+
+        with _engine(database_url).begin() as connection:
+            result = connection.execute(
+                text(
+                    """
+                    UPDATE scan_runs
+                    SET status = 'failed',
+                        error = 'interrupted: scan did not finish (server restarted or timed out)',
+                        finished_at = NOW()
+                    WHERE status IN ('queued', 'running')
+                      AND started_at < NOW() - make_interval(mins => :minutes)
+                    """
+                ),
+                {"minutes": older_than_minutes},
+            )
+        return result.rowcount or 0
+    except Exception as exc:
+        return _handle_repository_error("stale scan run cleanup failed", exc, 0)
+
+
 def get_scan_run(database_url: str, scan_run_id: int) -> dict | None:
     try:
         from sqlalchemy import text

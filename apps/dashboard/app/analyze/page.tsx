@@ -362,6 +362,8 @@ function AnalysisResult({ data }: { data: StockAnalysis }) {
 }
 
 function formatAnalysisSource(source: string) {
+  // "gemini:<รุ่น>" = รุ่นที่ตอบจริง (อาจเป็นรุ่นสำรองถ้ารุ่นหลักโดนจำกัดโควตา)
+  if (source.startsWith("gemini:")) return `Gemini · ${source.slice(7)}`;
   if (source === "gemini") return "Gemini";
   if (source === "openai") return "OpenAI";
   if (source === "ai") return "AI";

@@ -16,6 +16,7 @@ from workers.repository import (
     bot_tables_ready,
     create_scan_run,
     database_available,
+    fail_stale_scan_runs,
     get_signal,
     get_scan_run,
     latest_scan_run,
@@ -321,6 +322,44 @@ async def run_scan(
         "failed_symbol_count": scan_result["failed_symbol_count"],
         "candidate_symbol_count": scan_result["candidate_symbol_count"],
     }
+
+
+# งานสแกนที่กำลังรันอยู่ใน process นี้ ต่อชนิด — กันผู้ใช้กดปุ่มซ้ำแล้วได้สแกนซ้อนกัน
+# (Redis lock ใช้ไม่ได้เมื่อ Redis ต่อไม่ติด จึงต้องมีตัวกันระดับ process ด้วย)
+_ACTIVE_SCANS: dict[str, int] = {}
+
+
+def start_scan_in_background(kind: str = "momentum", send_telegram: bool = False) -> dict:
+    """สร้าง scan run แล้วรันในเธรดเบื้องหลัง คืนสถานะ queued ทันที.
+
+    เดิม /scan/run รันสแกนทั้งหมดภายใน request (60+ วินาที) ถ้านานกว่า timeout ของ
+    proxy หน้าโฮสต์ การเชื่อมต่อจะถูกตัด แล้ว Safari แสดง "Load failed"
+    ตอนนี้หน้าเว็บได้ id กลับไปทันที แล้วถาม /scan/runs/{id} เป็นระยะแทน
+    """
+    import threading
+
+    settings = get_settings()
+    active_id = _ACTIVE_SCANS.get(kind)
+    if active_id is not None:
+        existing = get_scan_run(settings.database_url, active_id)
+        if existing:
+            return existing
+
+    scan_run = create_queued_scan(kind=kind)
+    run_id = scan_run["id"]
+    _ACTIVE_SCANS[kind] = run_id
+
+    def _run() -> None:
+        try:
+            execute_scan_job(run_id, kind=kind, send_telegram=send_telegram)
+        except Exception:
+            # execute_scan_job บันทึกสถานะ failed + error ลง DB ให้แล้ว
+            logger.warning("scan_failed", extra={"event": "scan_failed", "kind": kind, "scan_run_id": run_id}, exc_info=True)
+        finally:
+            _ACTIVE_SCANS.pop(kind, None)
+
+    threading.Thread(target=_run, name=f"scan-{kind}-{run_id}", daemon=True).start()
+    return scan_run
 
 
 def create_queued_scan(kind: str = "momentum") -> dict:
@@ -700,11 +739,13 @@ def list_signal_dicts(
 
 def get_scan_run_dict(scan_run_id: int) -> dict | None:
     settings = get_settings()
+    fail_stale_scan_runs(settings.database_url)
     return get_scan_run(settings.database_url, scan_run_id)
 
 
 def get_latest_scan_run_dict(kind: str | None = None) -> dict | None:
     settings = get_settings()
+    fail_stale_scan_runs(settings.database_url)
     return latest_scan_run(settings.database_url, kind=kind)
 
 

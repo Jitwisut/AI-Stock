@@ -196,15 +196,20 @@ def test_scan_run_enqueues_with_admin_key(monkeypatch) -> None:
     assert response.json()["status"] == "queued"
 
 
-def test_enqueue_scan_job_runs_inline_when_background_workers_are_disabled(monkeypatch) -> None:
+def test_enqueue_scan_job_runs_in_background_when_workers_are_disabled(monkeypatch) -> None:
+    """ต้องคืน queued ทันทีแล้วรันสแกนในเธรด — ห้ามรันใน request (proxy timeout → "Load failed")."""
+    import threading
+
     _reset_settings(monkeypatch, APP_ENV="development", BACKGROUND_WORKERS_ENABLED="false")
 
+    import workers.services
     import workers.tasks
 
     calls = []
-
+    done = threading.Event()
+    monkeypatch.setattr(workers.services, "_ACTIVE_SCANS", {})
     monkeypatch.setattr(
-        workers.tasks,
+        workers.services,
         "create_queued_scan",
         lambda kind="momentum": {
             "id": 456,
@@ -219,35 +224,19 @@ def test_enqueue_scan_job_runs_inline_when_background_workers_are_disabled(monke
             "error": None,
         },
     )
-    monkeypatch.setattr(
-        workers.tasks,
-        "execute_scan_job",
-        lambda scan_run_id, *, kind="momentum", send_telegram=False: calls.append(
-            (scan_run_id, kind, send_telegram)
-        ),
-    )
-    monkeypatch.setattr(
-        workers.tasks,
-        "get_scan_run",
-        lambda database_url, scan_run_id: {
-            "id": scan_run_id,
-            "kind": "momentum",
-            "status": "completed",
-            "provider": "nasdaq",
-            "started_at": None,
-            "finished_at": None,
-            "universe_count": 0,
-            "scanned_count": 0,
-            "failed_count": 0,
-            "error": None,
-        },
-    )
+
+    def fake_execute(scan_run_id, *, kind="momentum", send_telegram=False):
+        calls.append((scan_run_id, kind, send_telegram))
+        done.set()
+
+    monkeypatch.setattr(workers.services, "execute_scan_job", fake_execute)
 
     response = workers.tasks.enqueue_scan_job(kind="momentum", send_telegram=True)
 
-    assert calls == [(456, "momentum", True)]
     assert response["id"] == 456
-    assert response["status"] == "completed"
+    assert response["status"] == "queued"
+    assert done.wait(timeout=5)
+    assert calls == [(456, "momentum", True)]
 
 
 def test_health_ready_fails_when_provider_is_not_configured(monkeypatch) -> None:
@@ -297,15 +286,17 @@ def test_stock_analysis_returns_503_when_live_price_is_unavailable(monkeypatch) 
 
 
 def test_stock_analysis_uses_gemini_when_configured(monkeypatch) -> None:
-    async def fake_generate_gemini_text(*args, **kwargs) -> str:
-        return "gemini analysis"
+    from workers.ai.gemini_client import GeminiResult
+
+    async def fake_generate_gemini(*args, **kwargs) -> GeminiResult:
+        return GeminiResult(text="gemini analysis", model="gemini-3-flash-preview")
 
     import workers.ai.analyze_stock
 
     monkeypatch.setattr(
         workers.ai.analyze_stock,
-        "generate_gemini_text",
-        fake_generate_gemini_text,
+        "generate_gemini",
+        fake_generate_gemini,
     )
 
     text, source = asyncio.run(
@@ -320,7 +311,8 @@ def test_stock_analysis_uses_gemini_when_configured(monkeypatch) -> None:
     )
 
     assert text == "gemini analysis"
-    assert source == "gemini"
+    # แหล่งที่มาต้องบอกรุ่นที่ตอบจริง ไม่ใช่รุ่นที่ขอ
+    assert source == "gemini:gemini-3-flash-preview"
 
 
 def test_surge_universe_includes_microcap_movers() -> None:

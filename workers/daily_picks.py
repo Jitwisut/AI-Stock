@@ -248,15 +248,17 @@ async def _ai_verdicts(candidates: list[dict]) -> tuple[dict[str, dict], str]:
     if settings.ai_provider != "gemini" or not settings.gemini_api_key:
         return {}, "rules"
 
-    from workers.ai.gemini_client import generate_gemini_text
+    from workers.ai.gemini_client import generate_gemini
 
     try:
-        text = await generate_gemini_text(
+        result = await generate_gemini(
             _build_prompt(candidates),
             api_key=settings.gemini_api_key,
             model=settings.gemini_model,
             temperature=0.3,
         )
+        text = result.text
+        logger.info("daily picks: answered by %s", result.model)
     except Exception as exc:
         logger.warning("daily picks: gemini failed (%s)", exc)
         return {}, "rules"

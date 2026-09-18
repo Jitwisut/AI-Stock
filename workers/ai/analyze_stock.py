@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from workers.ai.gemini_client import generate_gemini_text
+from workers.ai.gemini_client import generate_gemini
 from workers.data_models import NewsItem, SignalScore, Stock
 from workers.recommendations import recommendation_for, surge_grade, surge_plan, surge_score
 
@@ -55,13 +55,14 @@ async def analyze_stock_with_ai(
     prompt = _build_stock_analysis_prompt(stock, signal, news_items)
     if ai_provider == "gemini" and gemini_api_key:
         try:
-            text = await generate_gemini_text(
+            result = await generate_gemini(
                 prompt,
                 api_key=gemini_api_key,
                 model=gemini_model,
                 temperature=0.25,
             )
-            return text, "gemini"
+            # บอกรุ่นที่ตอบจริง เพื่อไม่ให้ผู้ใช้เข้าใจผิดเมื่อรุ่นหลักตกไปใช้ตัวสำรอง
+            return result.text, f"gemini:{result.model}"
         except Exception:
             return render_fallback_stock_analysis(stock, signal, news_items), "rules"
 

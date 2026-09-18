@@ -11,6 +11,7 @@ from typing import Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 logger = logging.getLogger(__name__)
 
@@ -183,6 +184,11 @@ async def _on_startup() -> None:
 async def lifespan(app: FastAPI):
     settings = get_settings()
     run_migrations(settings.database_url)
+    if not settings.background_workers_enabled:
+        # สแกนรันในเธรดของ process นี้ — รีสตาร์ทแล้วงานที่ค้างอยู่ไม่มีวันจบ ปิดสถานะให้ชัด
+        from workers.repository import fail_stale_scan_runs
+
+        fail_stale_scan_runs(settings.database_url, older_than_minutes=0)
     asyncio.create_task(_on_startup())
     yield
 
@@ -190,6 +196,28 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="AI Momentum Stock Radar", version="0.1.0", lifespan=lifespan)
 settings = get_settings()
 
+@app.middleware("http")
+async def _json_errors(request, call_next):
+    """แปลง exception ที่หลุดมาเป็น JSON 500 ภายใน CORS middleware.
+
+    ถ้าปล่อยให้ ServerErrorMiddleware ของ Starlette (ชั้นนอกสุด) ตอบ 500 เอง
+    response จะไม่มี header CORS แล้วเบราว์เซอร์รายงานเป็น "Load failed" /
+    "Failed to fetch" แทนข้อความ error จริง
+    """
+    try:
+        return await call_next(request)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception(
+            "unhandled_error",
+            extra={"event": "api_error", "path": request.url.path, "error_type": type(exc).__name__},
+        )
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"Internal error: {type(exc).__name__}"},
+        )
+
+
+# add_middleware หลังสุด = ชั้นนอกสุด → CORS ครอบ _json_errors ไว้ ทุก response จึงมี CORS header
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.backend_cors_origins,
@@ -234,11 +262,15 @@ def health_ready() -> dict:
 
 
 @app.post("/scan/run", response_model=ScanRunStatusOut)
-async def run_scan_endpoint(
+def run_scan_endpoint(
     send_telegram: bool = False,
     kind: str = Query(default="momentum", pattern="^(momentum|surge|longterm|universe_refresh)$"),
     _: None = Depends(require_admin_api_key),
 ) -> dict:
+    """เริ่มสแกนแล้วคืนสถานะ queued ทันที — ผลลัพธ์ให้ถามต่อที่ /scan/runs/{id}.
+
+    เป็น def ธรรมดา (รันใน threadpool) เพื่อไม่ให้การต่อ DB/Redis ไปบล็อก event loop
+    """
     from workers.tasks import enqueue_scan_job
 
     return enqueue_scan_job(kind=kind, send_telegram=send_telegram)
