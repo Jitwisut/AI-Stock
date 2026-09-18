@@ -125,6 +125,8 @@ class Settings:
     surge_db_max_age_minutes: int
     surge_min_price: float
     surge_max_gap_percent: float
+    momentum_min_price: float
+    momentum_min_dollar_volume: float
 
 
 @lru_cache
@@ -216,6 +218,10 @@ def get_settings() -> Settings:
             maximum=240,
         ),
         surge_min_price=_env_float("SURGE_MIN_PRICE", default=0.2, minimum=0.0, maximum=10.0),
+        momentum_min_price=_env_float("MOMENTUM_MIN_PRICE", default=2.0, minimum=0.0, maximum=100.0),
+        momentum_min_dollar_volume=_env_float(
+            "MOMENTUM_MIN_DOLLAR_VOLUME", default=2_000_000.0, minimum=0.0, maximum=1e10
+        ),
         surge_max_gap_percent=_env_float(
             "SURGE_MAX_GAP_PERCENT",
             default=500.0,

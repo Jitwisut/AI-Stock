@@ -162,6 +162,8 @@ def scan_market(
             )
         if min_change_percent is not None and snapshot.premarket_gap_percent < min_change_percent:
             continue
+        if sort_mode == "score" and not _passes_momentum_floor(snapshot, settings):
+            continue
         if stock:
             price_candidates.append((stock, snapshot, _price_candidate_score(snapshot)))
 
@@ -764,6 +766,8 @@ async def analyze_stock_query(query: str) -> dict:
     market_data = get_market_data_provider(use_live_data=settings.use_live_data)
     news_provider = get_news_provider(use_live_data=settings.use_live_data)
     snapshot = market_data.get_snapshot(stock.symbol)
+    # quote ไม่มีฐานวอลุ่ม/high ย้อนหลัง → เติมจากแท่งราคาจริงก่อนให้คะแนน
+    snapshot = _enrich_with_history([(stock, snapshot, 0.0)])[0][1]
     news_items = news_provider.get_company_news(stock.symbol)
     signal = build_signal(stock, snapshot, news_items)
     analysis_text, analysis_source = await analyze_stock_with_ai(
@@ -1106,6 +1110,20 @@ def _merge_realtime_snapshot(original: MarketSnapshot, fresh: MarketSnapshot) ->
     )
 
 
+def _passes_momentum_floor(snapshot: MarketSnapshot, settings) -> bool:
+    """เกณฑ์ขั้นต่ำของแดชบอร์ด momentum: ตัดหุ้นเพนนี/สภาพคล่องต่ำที่ spread กว้าง.
+
+    หน้า "หุ้นซิ่ง" ยังเห็นหุ้นเล็กได้ตามเดิม (ใช้ sort_mode="surge" และเกณฑ์ของตัวเอง)
+    """
+    price = snapshot.premarket_price or snapshot.latest_price
+    if price < settings.momentum_min_price:
+        return False
+    # ก่อนตลาดเปิด วอลุ่มของวันยังเป็น 0 — ไม่ตัดด้วยเกณฑ์มูลค่าซื้อขายในกรณีนั้น
+    if snapshot.volume > 0 and price * snapshot.volume < settings.momentum_min_dollar_volume:
+        return False
+    return True
+
+
 def _enrich_with_history(
     candidates: list[tuple[Stock, MarketSnapshot, float]],
 ) -> list[tuple[Stock, MarketSnapshot, float]]:
@@ -1189,7 +1207,8 @@ def _price_candidate_score(snapshot) -> float:
     liquidity_bonus = min(28.0, math.log10(dollar_volume + 1) * 3.2)
     return (
         gap * 4.0
-        + snapshot.relative_volume * 12.0
+        # clamp: relvol จริงอาจถึงหลักร้อย/พันในหุ้นเล็ก ถ้าไม่จำกัดเทอมนี้จะกลบทุกเทอมอื่น
+        + min(snapshot.relative_volume, 10.0) * 12.0
         + liquidity_bonus
         + small_price_bonus
         + (8 if gap >= 2 else 0)

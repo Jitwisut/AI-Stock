@@ -397,6 +397,7 @@ def start_discovery(strategy_id: str, market: str = "US", params: dict | None = 
         if status["strategy"] == strategy.id and status["status"] in {"queued", "running"} and status.get("params") == params:
             return _public_status(run_id)
 
+    _evict_finished(_STATUS)
     run_id = store.insert_run("discovery_runs", {"market": market, "strategy": strategy.id, "params": params, "status": "queued"})
     if run_id is None:
         run_id = f"mem-{int(time.time() * 1000)}"
@@ -405,6 +406,13 @@ def start_discovery(strategy_id: str, market: str = "US", params: dict | None = 
     _JOBS.put((run_id, strategy, params))
     _ensure_worker()
     return _public_status(run_id)
+
+
+def _evict_finished(statuses: dict, keep: int = 10) -> None:
+    """เก็บผลของงานที่จบแล้วไว้ในหน่วยความจำแค่ไม่กี่งาน (ที่เหลืออยู่ใน DB) กัน memory โตไม่หยุด."""
+    finished = [key for key, value in statuses.items() if value.get("status") in {"completed", "failed"}]
+    for key in finished[:-keep]:
+        statuses.pop(key, None)
 
 
 def _public_status(run_id) -> dict:

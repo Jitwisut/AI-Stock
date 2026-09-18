@@ -189,8 +189,10 @@ export async function postJson<T>(path: string): Promise<T> {
   let lastError: Error = new Error("เรียก API ไม่สำเร็จ");
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
+      const adminKey = process.env.NEXT_PUBLIC_ADMIN_API_KEY ?? "";
       const response = await fetch(`${API_BASE_URL}${path}`, {
         method: "POST",
+        headers: adminKey ? { "X-Admin-API-Key": adminKey } : {},
         signal: AbortSignal.timeout(60_000)
       });
       if (response.status >= 500 && attempt < 2) {

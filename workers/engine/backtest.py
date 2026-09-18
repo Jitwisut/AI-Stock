@@ -171,9 +171,15 @@ def start_backtest(params: dict) -> dict:
     with _LOCK:
         for status in _STATUS.values():
             if status["status"] in {"queued", "running"}:
-                return {k: v for k, v in status.items() if k != "result"}
+                # เธรดที่ตายกลางทาง (เช่น OOM) จะค้างสถานะ running — เกิน 30 นาทีถือว่าล้มเหลว
+                if time.time() - status.get("_started_ts", time.time()) > 30 * 60:
+                    status.update(status="failed", error="interrupted: backtest did not finish")
+                    continue
+                return {k: v for k, v in status.items() if k not in {"result", "_started_ts"}}
+        for key in [k for k, v in _STATUS.items() if v["status"] in {"completed", "failed"}][:-3]:
+            _STATUS.pop(key, None)
         run_id = store.insert_run("backtest_runs", {"status": "queued", "params": params}) or f"mem-{int(time.time())}"
-        status = {"id": run_id, "status": "queued", "params": params, "started_at": iso(utcnow()), "progress": "รอเริ่ม"}
+        status = {"id": run_id, "status": "queued", "params": params, "started_at": iso(utcnow()), "progress": "รอเริ่ม", "_started_ts": time.time()}
         _STATUS[run_id] = status
 
     def _run():
@@ -191,13 +197,13 @@ def start_backtest(params: dict) -> dict:
                              {"status": "failed", "error": str(exc)[:300], "finished_at": utcnow()})
 
     threading.Thread(target=_run, name="backtest", daemon=True).start()
-    return {k: v for k, v in status.items() if k != "result"}
+    return {k: v for k, v in status.items() if k not in {"result", "_started_ts"}}
 
 
 def get_backtest(run_id) -> dict | None:
     key = int(run_id) if isinstance(run_id, str) and run_id.isdigit() else run_id
     if key in _STATUS:
-        return _STATUS[key]
+        return {k: v for k, v in _STATUS[key].items() if k != "_started_ts"}
     if isinstance(key, int):
         row = store.fetch_run("backtest_runs", run_id=key)
         if row:
@@ -209,7 +215,7 @@ def get_backtest(run_id) -> dict | None:
 def latest_backtest() -> dict | None:
     done = [s for s in _STATUS.values() if s["status"] == "completed"]
     if done:
-        return done[-1]
+        return {k: v for k, v in done[-1].items() if k != "_started_ts"}
     row = store.fetch_run("backtest_runs", where={"status": "completed"})
     if row:
         return {"id": row["id"], "status": "completed", "result": row.get("results"), "finished_at": row.get("finished_at")}

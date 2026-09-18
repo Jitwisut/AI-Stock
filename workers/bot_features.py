@@ -201,10 +201,11 @@ def compare_symbols(symbols: list[str]) -> list[dict]:
             "symbol": symbol.upper(),
             "price": snapshot.latest_price,
             "change_percent": change_percent(snapshot),
+            # ไม่มีฐานวอลุ่ม = ไม่ทราบ (None) ห้ามใส่ 1.0 แทน
             "relative_volume": (
                 snapshot.volume / snapshot.average_volume_20d
                 if snapshot.average_volume_20d > 0
-                else 1.0
+                else None
             ),
             "return_3m_percent": None,
             "pct_from_52w_high": None,

@@ -8,9 +8,10 @@ from __future__ import annotations
 import asyncio
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
 
+from apps.api.app.security import require_admin_api_key
 from workers.engine import discovery, market_calendar, runtime
 from workers.engine.runtime import ProviderUnavailableError, SymbolNotFoundError
 
@@ -74,6 +75,7 @@ def discovery_run(
     w_fundamental: Optional[float] = Query(default=None, ge=0, le=100),
     w_risk: Optional[float] = Query(default=None, ge=0, le=100),
     w_catalyst: Optional[float] = Query(default=None, ge=0, le=100),
+    _: None = Depends(require_admin_api_key),
 ) -> dict:
     params = {"limit": limit, "min_price": min_price, "min_market_cap": min_market_cap}
     if deep_scan_limit:
@@ -220,6 +222,7 @@ def data_status() -> dict:
 def backtest_run(
     sample: int = Query(default=150, ge=20, le=400),
     step: int = Query(default=5, ge=1, le=20),
+    _: None = Depends(require_admin_api_key),
 ) -> dict:
     from workers.engine.backtest import start_backtest
 

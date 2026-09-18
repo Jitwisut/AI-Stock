@@ -193,6 +193,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
+from apps.api.app.security import require_admin_api_key  # noqa: E402
 from workers.engine.logging_setup import configure_logging  # noqa: E402
 
 configure_logging()
@@ -233,16 +234,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-def require_admin_api_key(x_admin_api_key: Optional[str] = Header(default=None)) -> None:
-    settings = get_settings()
-    if not settings.admin_api_key:
-        if settings.app_env == "production":
-            raise HTTPException(status_code=503, detail="ADMIN_API_KEY is not configured")
-        return
-    if x_admin_api_key != settings.admin_api_key:
-        raise HTTPException(status_code=403, detail="Invalid admin API key")
 
 
 @app.get("/health")
@@ -539,9 +530,13 @@ def _format_surge_line(signal: dict, index: int) -> str:
     """แปลง surge signal dict เป็นข้อความบรรทัดเดียว."""
     grade = (signal.get("surge_grade") or {}).get("grade", "-")
     change = signal.get("premarket_gap_percent", 0.0)
-    rel_vol = signal.get("relative_volume", 0.0)
     price = signal.get("latest_price", 0.0)
-    return f"{index}. {signal.get('symbol', '?')} [{grade}] {change:+.1f}% · vol {rel_vol:.1f}x · ${price:.2f}"
+    return f"{index}. {signal.get('symbol', '?')} [{grade}] {change:+.1f}% · {_fmt_rel_vol(signal.get('relative_volume'))} · ${price:.2f}"
+
+
+def _fmt_rel_vol(value) -> str:
+    """relative volume 0/None = ไม่มีฐานวอลุ่มให้เทียบ → N/A (ไม่แสดง 0.0x หรือ 1.0x ปลอม)."""
+    return f"vol {value:.1f}x" if isinstance(value, (int, float)) and value > 0 else "vol N/A"
 
 
 async def _run_analysis(query: str) -> dict:
@@ -563,11 +558,9 @@ def _format_analysis(result: dict) -> str:
     name = stock.get("name") or ""
     price = signal.get("latest_price", 0.0)
     change = signal.get("premarket_gap_percent", 0.0)
-    rel_vol = signal.get("relative_volume", 0.0)
-
     lines = [
         f"📊 วิเคราะห์ {symbol}" + (f" — {name}" if name else ""),
-        f"ราคา ${price:.2f} · {change:+.1f}% · vol {rel_vol:.1f}x · เกรด [{grade}]",
+        f"ราคา ${price:.2f} · {change:+.1f}% · {_fmt_rel_vol(signal.get('relative_volume'))} · เกรด [{grade}]",
     ]
     if rec.get("label"):
         lines.append(f"คำแนะนำเชิงเฝ้าดู: {rec['label']}")
@@ -738,7 +731,7 @@ async def _handle_compare(telegram, chat_id: str, arg: str) -> None:
     lines = ["⚖️ เทียบหุ้น (ราคาปิดล่าสุด)\n"]
     for row in rows:
         lines.append(f"{row['symbol']} — ${row['price']:.2f} · {row['change_percent']:+.2f}%")
-        details = [f"vol {row['relative_volume']:.1f}x"]
+        details = [_fmt_rel_vol(row.get("relative_volume"))]
         if row.get("return_3m_percent") is not None:
             details.append(f"3 ด. {row['return_3m_percent']:+.1f}%")
         if row.get("pct_from_52w_high") is not None:
