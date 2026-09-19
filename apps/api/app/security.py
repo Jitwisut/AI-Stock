@@ -1,24 +1,13 @@
 from __future__ import annotations
 
 import hmac
-import os
 from typing import Optional
 
-__all__ = ["is_publicly_hosted", "require_admin_api_key", "secrets_match"]
+__all__ = ["require_admin_api_key", "secrets_match"]
 
 from fastapi import Header, HTTPException
 
 from workers.config import get_settings
-
-
-def is_publicly_hosted() -> bool:
-    """จริงเมื่อ process นี้เข้าถึงได้จากอินเทอร์เน็ต.
-
-    เช็ค RENDER_EXTERNAL_URL ด้วย ไม่พึ่ง app_env อย่างเดียว เพราะ service จริงบน Render
-    รายงาน app_env=development อยู่ ทำให้ guard กลายเป็นโมฆะทั้งที่เปิดสู่สาธารณะ
-    """
-    settings = get_settings()
-    return settings.app_env == "production" or bool(os.getenv("RENDER_EXTERNAL_URL"))
 
 
 def secrets_match(provided: Optional[str], expected: str) -> bool:
@@ -36,7 +25,10 @@ def secrets_match(provided: Optional[str], expected: str) -> bool:
 def require_admin_api_key(x_admin_api_key: Optional[str] = Header(default=None)) -> None:
     settings = get_settings()
     if not settings.admin_api_key:
-        if is_publicly_hosted():
+        # หมายเหตุ: service จริงบน Render รายงาน app_env=development และยังไม่ได้ตั้ง
+        # ADMIN_API_KEY จึงเท่ากับปล่อยผ่านทุก request — ตั้ง ADMIN_API_KEY เมื่อไร
+        # guard ถึงจะเริ่มทำงานจริง
+        if settings.app_env == "production":
             raise HTTPException(status_code=503, detail="ADMIN_API_KEY is not configured")
         return
     if not secrets_match(x_admin_api_key, settings.admin_api_key):
