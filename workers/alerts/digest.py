@@ -24,22 +24,34 @@ def _session_label(now: datetime) -> str:
     return "เช้า" if now.hour < 12 else "ค่ำ"
 
 
+def _num(value) -> float:
+    """แปลงเป็น float เสมอ — ค่าที่วิ่งผ่าน JSONB อาจกลับมาเป็น str หรือ None
+    ซึ่งจะทำให้ format spec อย่าง :.1f โยน error แล้วล้ม digest ทั้งรอบ."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def build_daily_digest(surge_limit: int = 5, longterm_limit: int = 5) -> str:
     """สร้างข้อความสรุปรายวันภาษาไทย: หุ้นซิ่ง Top + หุ้นน่าสะสมระยะยาว Top."""
     now = datetime.now(_TZ)
     date_text = now.strftime("%d/%m/%Y %H:%M")
     lines: list[str] = [f"🔔 AI Stock Radar — สรุป{_session_label(now)} {date_text}", ""]
 
+    # ใช้ .get() ทุกช่อง: ของเดิม index ตรง ๆ (pick['return_6m_percent']) แถวเดียวที่
+    # ข้อมูลไม่ครบจะโยน KeyError ออกมาจาก build_daily_digest ที่ไม่มี try ครอบ
+    # ทำให้สรุปรอบ 08:00/20:00 ล่มทั้งรอบสำหรับสมาชิกทุกคน
     surge = get_surge_signal_dicts(limit=surge_limit)
     lines.append("🚀 หุ้นซิ่ง (ระยะสั้น ถือไว-ออกไว)")
     if surge:
         for index, signal in enumerate(surge, start=1):
             grade = (signal.get("surge_grade") or {}).get("grade", "-")
-            change = signal.get("premarket_gap_percent", 0.0)
-            rel_vol = signal.get("relative_volume", 0.0)
-            price = signal.get("latest_price", 0.0)
+            change = _num(signal.get("premarket_gap_percent"))
+            rel_vol = _num(signal.get("relative_volume"))
+            price = _num(signal.get("latest_price"))
             lines.append(
-                f"{index}. {signal['symbol']} [{grade}] "
+                f"{index}. {signal.get('symbol', '?')} [{grade}] "
                 f"{change:+.1f}% · vol {rel_vol:.1f}x · ${price:.2f}"
             )
             catalyst = (signal.get("catalyst") or "").strip()
@@ -54,9 +66,10 @@ def build_daily_digest(surge_limit: int = 5, longterm_limit: int = 5) -> str:
     if longterm:
         for index, pick in enumerate(longterm, start=1):
             lines.append(
-                f"{index}. {pick['symbol']} [{pick['grade']}] "
-                f"คะแนน {pick['score']:.0f} · 6 ด. {pick['return_6m_percent']:+.0f}% · "
-                f"${pick['price']:.2f}"
+                f"{index}. {pick.get('symbol', '?')} [{pick.get('grade', '-')}] "
+                f"คะแนน {_num(pick.get('score')):.0f} · "
+                f"6 ด. {_num(pick.get('return_6m_percent')):+.0f}% · "
+                f"${_num(pick.get('price')):.2f}"
             )
             reasons = pick.get("reasons") or []
             if reasons:
@@ -69,10 +82,14 @@ def build_daily_digest(surge_limit: int = 5, longterm_limit: int = 5) -> str:
     return "\n".join(lines)
 
 
-async def send_daily_digest() -> dict:
-    """สร้าง digest แล้วส่งเข้า Telegram — ทั้ง chat หลักและผู้ที่กด /subscribe."""
+async def send_daily_digest(surge_limit: int = 5, longterm_limit: int = 5) -> dict:
+    """สร้าง digest แล้วส่งเข้า Telegram — ทั้ง chat หลักและผู้ที่กด /subscribe.
+
+    รับ limit ทั้งสองตัวเพราะ /alerts/daily-digest ส่งมาเป็น kwargs อยู่แล้ว
+    ของเดิมไม่มีพารามิเตอร์ ทำให้ endpoint นั้นโยน TypeError ทุกครั้งที่ถูกเรียก
+    """
     settings = get_settings()
-    message = build_daily_digest()
+    message = build_daily_digest(surge_limit=surge_limit, longterm_limit=longterm_limit)
 
     telegram = TelegramClient(settings.telegram_bot_token, settings.telegram_chat_id)
     if not telegram.is_configured:

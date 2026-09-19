@@ -27,6 +27,7 @@ from workers.scanner.fetch_stocks import fetch_stock_universe
 logger = logging.getLogger(__name__)
 
 _PICKS_CACHE: dict = {"ts": 0.0, "data": None}
+_BACKGROUND_TASKS: set = set()
 _PICKS_TTL_SECONDS = 45 * 60.0  # 45 นาที — ข้อมูล daily ไม่เปลี่ยนถี่กว่านี้อยู่แล้ว
 
 # จำนวนหุ้นที่ส่งให้ Gemini ตัดสิน — มากกว่านี้ prompt ยาวจนคุณภาพตก + เสี่ยง rate limit
@@ -431,7 +432,11 @@ def _start_background_build(limit: int) -> None:
         finally:
             _PICKS_CACHE["building"] = False
 
-    asyncio.create_task(_run())
+    # ต้องถืออ้างอิงไว้: event loop เก็บแค่ weak reference ถ้า GC เก็บ task นี้กลางคัน
+    # finally จะไม่ทำงาน ทำให้ building ค้างเป็น True แล้วแคชจะไม่ถูกสร้างใหม่อีกเลย
+    task = asyncio.create_task(_run())
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
 
 
 async def get_daily_picks(limit: int = 10, *, force: bool = False, wait: bool = False) -> dict:
