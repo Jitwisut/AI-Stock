@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import hmac
 import logging
 import os
 import re
@@ -234,7 +233,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-from apps.api.app.security import require_admin_api_key  # noqa: E402
+from apps.api.app.security import require_admin_api_key, secrets_match  # noqa: E402
 from workers.engine.logging_setup import configure_logging  # noqa: E402
 
 configure_logging()
@@ -1341,10 +1340,8 @@ async def telegram_webhook(
     ที่ลงทะเบียนไว้ตอน setWebhook ไม่งั้นใครเดา URL เจอก็สั่งบอทส่งข้อความหา chat ใดก็ได้
     """
     expected_secret = telegram_webhook_secret()
-    if expected_secret:
-        provided = x_telegram_bot_api_secret_token or ""
-        if not hmac.compare_digest(provided, expected_secret):
-            raise HTTPException(status_code=403, detail="Invalid webhook secret")
+    if expected_secret and not secrets_match(x_telegram_bot_api_secret_token, expected_secret):
+        raise HTTPException(status_code=403, detail="Invalid webhook secret")
 
     callback = update.get("callback_query")
     if callback:
