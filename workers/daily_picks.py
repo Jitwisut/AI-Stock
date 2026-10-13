@@ -40,10 +40,32 @@ _AI_ASKED: set = set()
 _BACKGROUND_TASKS: set = set()
 _PICKS_TTL_SECONDS = 45 * 60.0  # 45 นาที — ข้อมูล daily ไม่เปลี่ยนถี่กว่านี้อยู่แล้ว
 
-# จำนวนหุ้นที่ส่งให้ Gemini ตัดสิน — มากกว่านี้ prompt ยาวจนคุณภาพตก + เสี่ยง rate limit
-_AI_CANDIDATE_LIMIT = 12
-# จำนวนหุ้นที่ผ่านการคัดหยาบไปดึงประวัติราคา 1 ปี (ขั้นที่แพงที่สุด)
+
+
+def _env_int(name: str, default: int) -> int:
+    import os
+
+    try:
+        return max(1, int(os.getenv(name, str(default))))
+    except ValueError:
+        return default
+
+
+# จำนวนหุ้นที่ส่งให้ Gemini ให้คะแนน — ยังเป็น 1 call ต่อวันทำการ แค่ prompt ใหญ่ขึ้น
+_AI_CANDIDATE_LIMIT = _env_int("PICKS_AI_CANDIDATES", 25)
+# จำนวนหุ้นจากทั้งตลาดที่ดึงแท่งราคามาคำนวณจริง — แท่งถูกแคชรายวัน (bar_cache)
+# จึงจ่ายเต็มแค่รอบแรกของวันทำการ
+_DEEP_SCAN_LIMIT = _env_int("PICKS_DEEP_SCAN_LIMIT", 300)
+_FETCH_WORKERS = _env_int("PICKS_FETCH_WORKERS", 8)
+# universe ทั้งตลาด: หุ้นสามัญ ราคา ≥ $5, market cap ≥ $300M, มูลค่าซื้อขาย ≥ $10M/วัน
+_MIN_PRICE = 5.0
+_MIN_MARKET_CAP = 300e6
+_MIN_DOLLAR_VOLUME = 10e6
+# เส้นทางสำรอง (screener ล่ม → ใช้ 156 ตัวที่คัดไว้): จำนวนที่ผ่านการคัดหยาบไปดึงประวัติ
 _PRESCREEN_LIMIT = 25
+# ชุด deep scan ของแต่ละวันทำการ — ล็อกไว้ทั้ง session เพราะตัวเลขใน screener เปลี่ยน
+# ระหว่างตลาดเปิด ถ้าเลือกใหม่ทุกรอบ shortlist จะเปลี่ยนแล้ว AI ถูกเรียกซ้ำทั้งวัน
+_SELECTION: dict = {"session": None, "items": None, "funnel": None}
 # ประวัติที่ดึง (วันทำการ) — 420 พอสำหรับ SMA200 + ช่วง 52 สัปดาห์
 _HISTORY_DAYS = 420
 # จำนวนแท่งที่ส่งให้หน้าเว็บวาดกราฟราคา+วอลุ่ม
@@ -93,16 +115,37 @@ def _prescreen_score(snapshot: MarketSnapshot) -> float:
     return score
 
 
-def _enrich_candidate(stock: Stock, spy_bars: list[dict]) -> dict | None:
+def _engine_bars(symbol: str) -> list[dict]:
+    """แท่งรายวันจาก engine (แคชในหน่วยความจำ + DB รายวัน) ในรูปแบบเดียวกับ history provider."""
+    from workers.engine.bars import get_daily_bars
+
+    series = get_daily_bars(symbol)
+    return [
+        {
+            "date": bar.day.strftime("%m/%d/%Y"),
+            "open": bar.open,
+            "high": bar.high,
+            "low": bar.low,
+            "close": bar.close,
+            "volume": bar.volume,
+        }
+        for bar in series.bars
+    ]
+
+
+def _history_bars(symbol: str) -> list[dict]:
+    settings = get_settings()
+    return get_history_provider(use_live_data=settings.use_live_data).get_bars(symbol, days=_HISTORY_DAYS)
+
+
+def _enrich_candidate(stock: Stock, spy_bars: list[dict], load_bars=_history_bars) -> dict | None:
     """ดึงแท่งราคา 1 ปีกว่า แล้วคำนวณฟีเจอร์ทั้งหมดจากแท่ง (ราคาปิด EOD).
 
     ไม่ใช้ราคา quote สด: ระหว่างตลาดเปิดราคานั้นเป็นราคาระหว่างวัน ซึ่งจะทำให้
     คะแนนวันนี้กับการวัดผลย้อนหลัง (ใช้ราคาปิด) ไม่ได้อยู่บนฐานเดียวกัน
     """
-    settings = get_settings()
-    history = get_history_provider(use_live_data=settings.use_live_data)
     try:
-        bars = history.get_bars(stock.symbol, days=_HISTORY_DAYS)
+        bars = load_bars(stock.symbol)
     except Exception as exc:
         logger.debug("daily picks: skip %s (%s)", stock.symbol, exc)
         return None
@@ -116,6 +159,73 @@ def _enrich_candidate(stock: Stock, spy_bars: list[dict]) -> dict | None:
         "closes": [bar["close"] for bar in bars if bar.get("close")],
         "bars": bars[-_CHART_DAYS:],
     }
+
+
+def select_deep_scan(universe: list[dict], limit: int) -> tuple[list[dict], int]:
+    """เลือกหุ้นจากทั้งตลาดมาดึงแท่งราคา: 50% ตัวที่ขึ้นแรงสุด, 30% มูลค่าซื้อขายสูงสุด, ที่เหลือตัวใหญ่สุด.
+
+    คืน (รายการที่เลือก, จำนวนหุ้นที่ผ่านเกณฑ์สภาพคล่อง) · ช่วง pre-market วอลุ่มใน
+    screener อาจเป็น 0 ทั้งกระดาน → ข้ามเกณฑ์มูลค่าซื้อขายแทนที่จะได้ชุดว่าง
+    """
+    have_volume = sum(1 for item in universe if item.get("screener_dollar_volume", 0) > 0) > len(universe) * 0.5
+    liquid = (
+        [item for item in universe if item.get("screener_dollar_volume", 0) >= _MIN_DOLLAR_VOLUME]
+        if have_volume
+        else list(universe)
+    )
+    gainers = sorted(
+        (item for item in liquid if (item.get("screener_change_percent") or 0) > 0),
+        key=lambda item: item["screener_change_percent"],
+        reverse=True,
+    )
+    by_dollar = sorted(liquid, key=lambda item: item.get("screener_dollar_volume", 0), reverse=True) if have_volume else []
+    by_cap = sorted(liquid, key=lambda item: item.get("market_cap") or 0, reverse=True)
+
+    chosen: dict[str, dict] = {}
+    for ranked, quota in ((gainers, int(limit * 0.5)), (by_dollar, int(limit * 0.3)), (by_cap, limit)):
+        added = 0
+        for item in ranked:
+            if len(chosen) >= limit or added >= quota:
+                break
+            if item["symbol"] not in chosen:
+                chosen[item["symbol"]] = item
+                added += 1
+    return list(chosen.values()), len(liquid)
+
+
+def _deep_scan_selection() -> tuple[list[dict], dict]:
+    """ชุด deep scan ของวันทำการล่าสุด — คำนวณครั้งเดียวแล้วล็อกไว้ทั้ง session.
+
+    หลัง restart จะกู้ชุดเดิมจาก pick_snapshots (ถ้าบันทึกไว้ครบพอ) ไม่งั้นค่อยเลือกใหม่
+    """
+    from workers.engine.discovery import build_universe
+    from workers.engine.market_calendar import last_completed_session
+    from workers.pick_tracking import load_session_symbols
+
+    session = last_completed_session()
+    if _SELECTION["session"] == session and _SELECTION["items"]:
+        return _SELECTION["items"], dict(_SELECTION["funnel"])
+
+    universe, stats = build_universe({"min_price": _MIN_PRICE, "min_market_cap": _MIN_MARKET_CAP})
+    by_symbol = {item["symbol"]: item for item in universe}
+    restored = [by_symbol[symbol] for symbol in load_session_symbols(session) if symbol in by_symbol]
+    if len(restored) >= _DEEP_SCAN_LIMIT * 0.8:
+        items, liquid_count, origin = restored, None, "restored"
+    else:
+        items, liquid_count = select_deep_scan(universe, _DEEP_SCAN_LIMIT)
+        origin = "screener"
+    funnel = {
+        "universe": "full_market",
+        "listed": stats["listed"],
+        "passed_filters": stats["passed_filters"],
+        "liquid": liquid_count,
+        "deep_scan": len(items),
+        "selection": origin,
+        "filters": f"หุ้นสามัญ ราคา ≥ ${_MIN_PRICE:.0f}, market cap ≥ ${_MIN_MARKET_CAP / 1e6:.0f}M, "
+        f"มูลค่าซื้อขาย ≥ ${_MIN_DOLLAR_VOLUME / 1e6:.0f}M/วัน",
+    }
+    _SELECTION.update({"session": session, "items": items, "funnel": funnel})
+    return items, dict(funnel)
 
 
 def _days_to_earnings(symbol: str) -> int | None:
@@ -227,7 +337,7 @@ async def _ai_rubric(candidates: list[dict], market_context: dict) -> tuple[dict
                 temperature=0.0,
                 response_schema=RUBRIC_SCHEMA,
                 thinking_level="low",
-                timeout=120.0,
+                timeout=240.0,  # 25 ตัว: รุ่นสำรอง 2.5-flash ใช้ ~1-2 นาที
             )
             model = result.model
             fresh = parse_rubric_response(result.text, [c["symbol"] for c in prompt_candidates])
@@ -313,16 +423,12 @@ def _to_pick(candidate: dict, ai: dict | None) -> dict:
     }
 
 
-def _collect_candidates(stocks: list) -> tuple[list[dict], list[dict]]:
-    """ขั้น 1: คัดหยาบจากราคาล่าสุดทั้ง universe → ขั้น 2: ดึงแท่งราคาเฉพาะตัวที่ผ่าน.
-
-    คืน (candidates, แท่งราคาของ SPY ใช้เป็นภาวะตลาด)
-    """
+def _collect_legacy(stocks: list) -> tuple[list[dict], list[dict]]:
+    """เส้นทางสำรองเมื่อ screener ทั้งตลาดใช้ไม่ได้: 156 ตัวที่คัดไว้ + คัดหยาบจาก quote."""
     settings = get_settings()
     market_data = get_market_data_provider(use_live_data=settings.use_live_data)
-    history = get_history_provider(use_live_data=settings.use_live_data)
     try:
-        spy_bars = history.get_bars("SPY", days=_HISTORY_DAYS)
+        spy_bars = _history_bars("SPY")
     except Exception as exc:
         logger.warning("daily picks: SPY history unavailable (%s)", exc)
         spy_bars = []
@@ -333,23 +439,58 @@ def _collect_candidates(stocks: list) -> tuple[list[dict], list[dict]]:
         key=lambda stock: _prescreen_score(snapshots[stock.symbol.upper()]),
         reverse=True,
     )[:_PRESCREEN_LIMIT]
-
     workers_count = max(1, min(settings.scan_workers, len(ranked) or 1))
     with ThreadPoolExecutor(max_workers=workers_count) as executor:
-        candidates = [
-            item for item in executor.map(lambda stock: _enrich_candidate(stock, spy_bars), ranked) if item
-        ]
-    for rank, candidate in enumerate(candidates, 1):
-        candidate["prescreen_rank"] = rank
+        candidates = [item for item in executor.map(lambda stock: _enrich_candidate(stock, spy_bars), ranked) if item]
     return candidates, spy_bars
 
 
+def _collect_candidates() -> tuple[list[dict], list[dict], dict]:
+    """คืน (candidates พร้อมฟีเจอร์, แท่ง SPY, funnel) — ทั้งตลาดก่อน ถ้าพังใช้ชุดสำรอง."""
+    try:
+        items, funnel = _deep_scan_selection()
+        stocks = [
+            Stock(
+                symbol=item["symbol"],
+                name=item.get("name") or item["symbol"],
+                exchange="US",
+                sector=item.get("sector"),
+                market_cap=item.get("market_cap"),
+            )
+            for item in items
+        ]
+        try:
+            spy_bars = _engine_bars("SPY")
+        except Exception as exc:
+            logger.warning("daily picks: SPY bars unavailable (%s)", exc)
+            spy_bars = []
+        with ThreadPoolExecutor(max_workers=_FETCH_WORKERS) as executor:
+            candidates = [
+                item
+                for item in executor.map(lambda stock: _enrich_candidate(stock, spy_bars, _engine_bars), stocks)
+                if item
+            ]
+        if not candidates:
+            raise RuntimeError("no bars for any deep-scan symbol")
+    except Exception as exc:
+        logger.warning("daily picks: full-market universe failed, using curated list (%s)", exc)
+        stocks = fetch_stock_universe(mode="default")
+        candidates, spy_bars = _collect_legacy(stocks)
+        funnel = {"universe": "curated_fallback", "listed": len(stocks), "deep_scan": _PRESCREEN_LIMIT}
+
+    # prescreen_rank ใน pick_snapshots = ลำดับในชุด deep scan (ไม่ใช่คะแนน)
+    for rank, candidate in enumerate(candidates, 1):
+        candidate["prescreen_rank"] = rank
+    funnel["bars_ok"] = len(candidates)
+    return candidates, spy_bars, funnel
+
+
 async def build_daily_picks(limit: int = 10) -> dict:
-    """คำนวณรายการหุ้นน่าสนใจวันนี้ (สด ไม่พึ่ง DB) — สองขั้น: คัดหยาบ แล้วค่อยเจาะลึก."""
-    stocks = fetch_stock_universe(mode="default")
-    # ดึงราคาทั้ง universe + ประวัติ 1 ปี + ข่าว เป็น I/O แบบ blocking ~50 วินาที
-    # ต้องทำในเธรดแยก ไม่งั้นทั้ง server (webhook บอท + หน้าเว็บ) ค้างระหว่างนั้น
-    collected, spy_bars = await asyncio.to_thread(_collect_candidates, stocks)
+    """คำนวณรายการหุ้นน่าสนใจวันนี้ (สด ไม่พึ่ง DB) — คัดจากทั้งตลาดเป็นขั้น ๆ (funnel)."""
+    # screener + แท่งราคาหลายร้อยตัว + ข่าว เป็น I/O แบบ blocking — ต้องทำในเธรดแยก
+    # ไม่งั้นทั้ง server (webhook บอท + หน้าเว็บ) ค้างระหว่างนั้น
+    collected, spy_bars, funnel = await asyncio.to_thread(_collect_candidates)
+    universe_count = funnel.get("passed_filters") or funnel.get("listed") or 0
 
     if not collected:
         return {
@@ -357,7 +498,8 @@ async def build_daily_picks(limit: int = 10) -> dict:
             "analysis_source": "none",
             "ai_status": "skipped",
             "picks": [],
-            "universe_count": len(stocks),
+            "funnel": funnel,
+            "universe_count": universe_count,
             "disclaimer": _DISCLAIMER,
         }
 
@@ -369,8 +511,10 @@ async def build_daily_picks(limit: int = 10) -> dict:
     scored, ai_info = await _ai_rubric(shortlist, market_context)
     picks = [_to_pick(candidate, scored.get(candidate["stock"].symbol)) for candidate in shortlist]
     picks.sort(key=lambda item: item["score"], reverse=True)
+    funnel["shortlist"] = len(shortlist)
+    funnel["ai_scored"] = len(scored)
 
-    # เก็บผลทุกรอบ (ทั้ง 25 ตัวที่ผ่านด่านแรก ไม่ใช่แค่ตัวที่แสดง) ไว้วัดผลย้อนหลัง
+    # เก็บผลทุกรอบ (ทุกตัวใน deep scan ไม่ใช่แค่ตัวที่แสดง) ไว้วัดผลย้อนหลัง
     from workers.pick_tracking import save_pick_snapshots
 
     await asyncio.to_thread(save_pick_snapshots, collected, picks, ai_info)
@@ -382,8 +526,9 @@ async def build_daily_picks(limit: int = 10) -> dict:
         "ai_model": ai_info["model"],
         "ai_error": ai_info["error"],
         "market_context": market_context,
+        "funnel": funnel,
         "picks": picks[:limit],
-        "universe_count": len(stocks),
+        "universe_count": universe_count,
         "disclaimer": _DISCLAIMER,
     }
 

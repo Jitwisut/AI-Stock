@@ -451,7 +451,7 @@ export default function TodayPage() {
             <div className="mb-3 flex items-baseline justify-between">
               <h2 className="text-sm font-semibold text-ink">อันดับทั้งหมด</h2>
               <p className="text-[11px] text-ink-subtle">
-                คัดจาก {data?.universe_count ?? 0} ตัว · อัปเดต {formatTime(data?.generated_at ?? "")}
+                คัดจาก {(data?.universe_count ?? 0).toLocaleString()} ตัว · อัปเดต {formatTime(data?.generated_at ?? "")}
                 {data?.stale ? " · กำลังคำนวณรอบใหม่" : ""}
               </p>
             </div>

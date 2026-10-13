@@ -210,3 +210,83 @@ def test_ai_rubric_reuses_session_scores_and_only_asks_missing(monkeypatch):
     third = _run()
     assert third["status"] == "ok" and third["reused"] == 3
     assert asked == [["AAA", "BBB", "CCC"], ["CCC"]]   # รอบสามไม่เรียก AI
+
+
+# ── full-market funnel ──────────────────────────────────────────────────────
+
+
+def _u(symbol, change, dollar, cap):
+    return {"symbol": symbol, "name": symbol, "screener_change_percent": change,
+            "screener_dollar_volume": dollar, "market_cap": cap}
+
+
+def test_select_deep_scan_quotas_and_dedupe():
+    from workers import daily_picks as dp
+
+    universe = [_u(f"G{i}", 10 - i * 0.1, 50e6, 1e9) for i in range(20)]          # ตัวขึ้นแรง
+    universe += [_u(f"D{i}", -1.0, 900e6 - i * 1e6, 2e9) for i in range(20)]       # เทรดหนา (ลง)
+    universe += [_u(f"C{i}", 0.0, 20e6, 900e9 - i * 1e9) for i in range(20)]       # ตัวใหญ่
+    universe += [_u("ILLQ", 30.0, 1e6, 1e9)]                                       # ขึ้นแรงแต่สภาพคล่องต่ำ
+    chosen, liquid = dp.select_deep_scan(universe, 10)
+    symbols = [item["symbol"] for item in chosen]
+    assert liquid == 60 and "ILLQ" not in symbols
+    assert symbols[:5] == ["G0", "G1", "G2", "G3", "G4"]          # 50% ตัวขึ้นแรงสุด
+    assert symbols[5:8] == ["D0", "D1", "D2"]                      # 30% มูลค่าซื้อขายสูงสุด
+    assert len(symbols) == len(set(symbols)) == 10                # ไม่ซ้ำ + เติมที่เหลือด้วยตัวใหญ่
+
+
+def test_select_deep_scan_premarket_without_volume():
+    from workers import daily_picks as dp
+
+    universe = [_u(f"S{i}", 0.0, 0.0, 1e9 * (i + 1)) for i in range(10)]
+    chosen, liquid = dp.select_deep_scan(universe, 4)
+    assert liquid == 10 and len(chosen) == 4                     # ไม่ได้ชุดว่าง
+    assert chosen[0]["symbol"] == "S9"                             # เติมด้วยตัวใหญ่สุด
+
+
+def test_collect_candidates_falls_back_when_screener_fails(monkeypatch):
+    from workers import daily_picks as dp
+
+    def broken():
+        raise RuntimeError("screener down")
+
+    monkeypatch.setattr(dp, "_deep_scan_selection", broken)
+    monkeypatch.setattr(dp, "fetch_stock_universe", lambda mode: ["X"] * 156)
+    monkeypatch.setattr(dp, "_collect_legacy", lambda stocks: ([{"rule_score": 1}], []))
+    candidates, _spy, funnel = dp._collect_candidates()
+    assert funnel["universe"] == "curated_fallback" and funnel["listed"] == 156
+    assert candidates[0]["prescreen_rank"] == 1 and funnel["bars_ok"] == 1
+
+
+def test_deep_scan_selection_is_frozen_per_session(monkeypatch):
+    from datetime import date as _date
+
+    import workers.engine.discovery as disc
+    import workers.engine.market_calendar as cal
+    from workers import daily_picks as dp
+
+    responses = iter([
+        [_u("AAA", 9.0, 50e6, 1e9), _u("BBB", 1.0, 50e6, 1e9)],
+        [_u("ZZZ", 50.0, 90e6, 1e9), _u("BBB", 1.0, 50e6, 1e9)],   # ระหว่างวันตัวเลขเปลี่ยน
+    ])
+    calls = {"n": 0}
+
+    def fake_universe(params):
+        calls["n"] += 1
+        rows = next(responses)
+        return rows, {"listed": 2, "passed_filters": 2}
+
+    monkeypatch.setattr(disc, "build_universe", fake_universe)
+    monkeypatch.setattr(cal, "last_completed_session", lambda now=None: _date(2026, 10, 12))
+    monkeypatch.setattr(pt, "load_session_symbols", lambda session: [])
+    monkeypatch.setattr(dp, "_SELECTION", {"session": None, "items": None, "funnel": None})
+    monkeypatch.setattr(dp, "_DEEP_SCAN_LIMIT", 2)
+
+    first, _ = dp._deep_scan_selection()
+    second, _ = dp._deep_scan_selection()
+    assert [i["symbol"] for i in first] == [i["symbol"] for i in second] == ["AAA", "BBB"]
+    assert calls["n"] == 1                                         # ไม่ดึง screener ซ้ำใน session เดียวกัน
+
+    monkeypatch.setattr(cal, "last_completed_session", lambda now=None: _date(2026, 10, 13))
+    third, _ = dp._deep_scan_selection()                           # วันทำการใหม่ → เลือกใหม่
+    assert third[0]["symbol"] == "ZZZ"

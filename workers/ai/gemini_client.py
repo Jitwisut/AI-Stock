@@ -21,7 +21,7 @@ class GeminiResult:
 
 # รุ่นสำรองเมื่อรุ่นหลักใช้ไม่ได้ (429 โควตาหมด / 503 คนใช้เยอะ / 404 รุ่นถูกปลด)
 # ตั้งทับได้ด้วย GEMINI_FALLBACK_MODELS=a,b,c
-_DEFAULT_FALLBACK_MODELS = ("gemini-3-flash-preview", "gemini-2.5-flash")
+_DEFAULT_FALLBACK_MODELS = ("gemini-3-flash-preview", "gemini-3.8-flash", "gemini-2.5-flash")
 
 # รุ่นที่เพิ่งโดน 429 จะถูกข้ามชั่วคราว ไม่ต้องเสีย round trip ทุกคำขอ
 # (เช่น 3.1-pro บน free tier มีโควตา 0 → 429 ทุกครั้ง)

@@ -155,13 +155,20 @@ async def _on_startup() -> None:
 
         _spawn(_alert_loop())
 
-    # อุ่น cache "หุ้นน่าสนใจวันนี้" ไว้ล่วงหน้า — คำนวณสดใช้เวลา ~1 นาที
+    # อุ่น cache "หุ้นน่าสนใจวันนี้" ไว้ล่วงหน้า — รอบแรกของวันดึงแท่งราคาหลายร้อยตัวจากทั้งตลาด
     # ถ้าไม่อุ่นไว้ ผู้เข้าชมคนแรกหลัง deploy จะต้องรอทั้งก้อน
     if settings.use_live_data:
         async def _warm_picks() -> None:
             try:
                 from workers.daily_picks import get_daily_picks
+                from workers.services import is_refreshing
 
+                # เริ่มหลังสแกนซิ่ง/ระยะยาวเสร็จ — ยิง Nasdaq หลายร้อย request พร้อมกันเสี่ยงโดน rate limit
+                await asyncio.sleep(50)
+                for _ in range(48):
+                    if not (is_refreshing("surge") or is_refreshing("longterm")):
+                        break
+                    await asyncio.sleep(5)
                 await get_daily_picks(limit=10, wait=True)
                 logger.info("daily picks cache warmed")
             except Exception as exc:
@@ -1348,7 +1355,7 @@ async def _handle_today(telegram, chat_id: str, arg: str) -> None:
     from workers.daily_picks import get_daily_picks
 
     count, _fresh = _parse_alert_arg(arg, default=5, min_count=3, max_count=10)
-    await _reply(telegram, chat_id, "✨ กำลังคัดหุ้นน่าสนใจวันนี้... รอบแรกใช้เวลาราว 1 นาที")
+    await _reply(telegram, chat_id, "✨ กำลังคัดหุ้นน่าสนใจวันนี้จากทั้งตลาด... รอบแรกของวันใช้เวลาราว 2-3 นาที")
     data = await get_daily_picks(limit=count, wait=True)
     await _reply(telegram, chat_id, _format_daily_picks(data))
 

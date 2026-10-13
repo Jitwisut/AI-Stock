@@ -125,6 +125,30 @@ def save_pick_snapshots(collected: list[dict], picks: list[dict], ai_info: dict)
         return 0
 
 
+def load_session_symbols(session: date) -> list[str]:
+    """รายชื่อ deep scan ที่บันทึกไว้ของวันทำการนี้ (เรียงตามลำดับเดิม) — ใช้กู้ชุดเดิมหลัง restart."""
+    settings = get_settings()
+    if not settings.database_url:
+        return []
+    try:
+        from sqlalchemy import text
+
+        from workers.repository import _engine
+
+        with _engine(settings.database_url).connect() as connection:
+            rows = connection.execute(
+                text(
+                    "SELECT symbol FROM pick_snapshots WHERE session_date = :session "
+                    "ORDER BY prescreen_rank NULLS LAST, symbol"
+                ),
+                {"session": session},
+            ).all()
+    except Exception as exc:
+        logger.warning("pick snapshots: cannot load session symbols (%s)", exc)
+        return []
+    return [row[0] for row in rows]
+
+
 def load_session_ai_scores(session: date, symbols: list[str], *, market_open: bool) -> dict[str, dict]:
     """คะแนน AI ที่เคยให้ไว้แล้วสำหรับวันทำการนี้ — ใช้ซ้ำแทนการเรียก AI ใหม่.
 
@@ -296,19 +320,18 @@ def _load_rows() -> list[dict]:
 
 
 def _closes_by_date(symbol: str) -> list[tuple[date, float]]:
-    from workers.scanner.fetch_history import get_history_provider
+    """ราคาปิดรายวันผ่าน engine (แคชในหน่วยความจำ + bar_cache ใน DB รายวัน).
 
-    settings = get_settings()
+    snapshot มีหลายร้อยตัวต่อวัน ถ้าดึงตรงจาก provider ทุกครั้งที่แคชผลวัดหมดอายุ
+    จะยิง Nasdaq หลายร้อย request
+    """
+    from workers.engine.bars import get_daily_bars
+
     try:
-        bars = get_history_provider(use_live_data=settings.use_live_data).get_bars(symbol, days=200)
+        series = get_daily_bars(symbol)
     except Exception:
         return []
-    series = []
-    for bar in bars:
-        day = parse_bar_date(bar.get("date"))
-        if day and bar.get("close"):
-            series.append((day, float(bar["close"])))
-    return series
+    return [(bar.day, float(bar.close)) for bar in series.bars if bar.close]
 
 
 def evaluate_picks(top_n: int = 5) -> dict:
