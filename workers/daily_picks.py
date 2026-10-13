@@ -10,6 +10,8 @@ SAVE_SIGNALS=false ทำให้ตาราง signals ไม่มีข้�
 
 from __future__ import annotations
 
+import asyncio
+
 import json
 import logging
 import time
@@ -353,13 +355,10 @@ def _rule_reason(features: dict) -> str:
     return " · ".join(bits) if bits else "โครงสร้างราคายังไม่มีสัญญาณเด่น"
 
 
-async def build_daily_picks(limit: int = 10) -> dict:
-    """คำนวณรายการหุ้นน่าสนใจวันนี้ (สด ไม่พึ่ง DB) — สองขั้น: คัดหยาบ แล้วค่อยเจาะลึก."""
+def _collect_candidates(stocks: list) -> list[dict]:
+    """ขั้น 1: คัดหยาบจากราคาล่าสุดทั้ง universe → ขั้น 2: ดึงประวัติ 1 ปีเฉพาะตัวที่ผ่าน."""
     settings = get_settings()
-    stocks = fetch_stock_universe(mode="default")
     market_data = get_market_data_provider(use_live_data=settings.use_live_data)
-
-    # ขั้น 1: ราคาล่าสุดของทั้ง universe (ดึงขนานใน get_snapshots)
     snapshots = market_data.get_snapshots([stock.symbol for stock in stocks])
     ranked = sorted(
         (
@@ -371,10 +370,17 @@ async def build_daily_picks(limit: int = 10) -> dict:
         reverse=True,
     )[:_PRESCREEN_LIMIT]
 
-    # ขั้น 2: ดึงประวัติ 1 ปีเฉพาะตัวที่ผ่านการคัด
     workers_count = max(1, min(settings.scan_workers, len(ranked) or 1))
     with ThreadPoolExecutor(max_workers=workers_count) as executor:
-        collected = [item for item in executor.map(_enrich_candidate, ranked) if item]
+        return [item for item in executor.map(_enrich_candidate, ranked) if item]
+
+
+async def build_daily_picks(limit: int = 10) -> dict:
+    """คำนวณรายการหุ้นน่าสนใจวันนี้ (สด ไม่พึ่ง DB) — สองขั้น: คัดหยาบ แล้วค่อยเจาะลึก."""
+    stocks = fetch_stock_universe(mode="default")
+    # ดึงราคาทั้ง universe + ประวัติ 1 ปี + ข่าว เป็น I/O แบบ blocking ~50 วินาที
+    # ต้องทำในเธรดแยก ไม่งั้นทั้ง server (webhook บอท + หน้าเว็บ) ค้างระหว่างนั้น
+    collected = await asyncio.to_thread(_collect_candidates, stocks)
 
     if not collected:
         return {
@@ -387,7 +393,7 @@ async def build_daily_picks(limit: int = 10) -> dict:
 
     collected.sort(key=lambda item: item["rule_score"], reverse=True)
     shortlist = collected[: max(limit, _AI_CANDIDATE_LIMIT)][:_AI_CANDIDATE_LIMIT]
-    _attach_news(shortlist)
+    await asyncio.to_thread(_attach_news, shortlist)
 
     verdicts, source = await _ai_verdicts(shortlist)
     picks = [_to_pick(candidate, verdicts.get(candidate["stock"].symbol)) for candidate in shortlist]

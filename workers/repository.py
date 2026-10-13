@@ -692,18 +692,30 @@ def list_subscribers(database_url: str) -> list[str]:
 
 def add_position(
     database_url: str, chat_id: str, symbol: str, quantity: float, cost_basis: float
-) -> bool:
+) -> dict | None:
+    """เพิ่มหุ้นเข้าพอร์ต — ถ้ามีตัวเดิมอยู่แล้วจะรวมจำนวนและเฉลี่ยต้นทุน (ไม่ทับของเดิม).
+
+    คืนสถานะหลังบันทึก {"quantity", "cost_basis"} หรือ None ถ้าบันทึกไม่สำเร็จ
+    """
     try:
         from sqlalchemy import text
 
         with _engine(database_url).begin() as connection:
-            connection.execute(
+            row = connection.execute(
                 text(
                     """
                     INSERT INTO bot_portfolio (chat_id, symbol, quantity, cost_basis)
                     VALUES (:chat_id, :symbol, :quantity, :cost_basis)
                     ON CONFLICT (chat_id, symbol) DO UPDATE
-                    SET quantity = EXCLUDED.quantity, cost_basis = EXCLUDED.cost_basis
+                    SET quantity = bot_portfolio.quantity + EXCLUDED.quantity,
+                        cost_basis = COALESCE(
+                            (
+                                bot_portfolio.quantity * bot_portfolio.cost_basis
+                                + EXCLUDED.quantity * EXCLUDED.cost_basis
+                            ) / NULLIF(bot_portfolio.quantity + EXCLUDED.quantity, 0),
+                            EXCLUDED.cost_basis
+                        )
+                    RETURNING quantity, cost_basis
                     """
                 ),
                 {
@@ -712,10 +724,12 @@ def add_position(
                     "quantity": quantity,
                     "cost_basis": cost_basis,
                 },
-            )
-        return True
+            ).mappings().first()
+        if row is None:
+            return None
+        return {"quantity": float(row["quantity"]), "cost_basis": float(row["cost_basis"])}
     except Exception as exc:
-        return _handle_repository_error("add position failed", exc, False)
+        return _handle_repository_error("add position failed", exc, None)
 
 
 def remove_position(database_url: str, chat_id: str, symbol: str) -> bool:

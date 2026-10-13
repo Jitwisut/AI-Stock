@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 import time
@@ -691,12 +692,40 @@ def _longterm_pool(force: bool = False) -> list[dict]:
     return results
 
 
+_POOL_CACHES = {"surge": _SURGE_CACHE, "longterm": _LONGTERM_CACHE}
+
+
+def pool_age_seconds(name: str) -> float | None:
+    """อายุของชุดข้อมูลในหน่วยความจำ (วินาที) — None ถ้ายังไม่เคยคำนวณใน process นี้."""
+    cache = _POOL_CACHES[name]
+    if not cache["data"]:
+        return None
+    return time.time() - cache["ts"]
+
+
+def refresh_pool(name: str) -> bool:
+    """สั่งคำนวณชุด surge/longterm ใหม่เบื้องหลัง (ถ้ากำลังทำอยู่แล้วจะไม่สั่งซ้ำ)."""
+    workers = {
+        "surge": lambda: _serialized_surge_pool(force=True),
+        "longterm": lambda: _longterm_pool(force=True),
+    }
+    return start_background_refresh(name, workers[name])
+
+
 def get_longterm_signal_dicts(limit: int = 10) -> list[dict]:
     """หุ้นน่าสนใจสำหรับลงทุนระยะยาว — DB-first (เร็ว <1 วิ) fallback Redis/dev."""
     settings = get_settings()
     from workers.repository import latest_signals_by_kind
 
-    # DB-first: Celery beat scan ตอน 07:30 TH เก็บใน signals table
+    # ชุดที่คำนวณสดใน process นี้ (ยังไม่หมดอายุ 6 ชม.) ใหม่กว่าใน DB เสมอ — production
+    # ไม่มี Celery beat มาเขียน DB ใหม่ ถ้าอ่าน DB ก่อนจะได้ราคาเก่าค้างเป็นเดือน
+    memory = _LONGTERM_CACHE["data"]
+    if memory and time.time() - _LONGTERM_CACHE["ts"] < _LONGTERM_TTL_SECONDS:
+        return memory[:limit]
+    # ไม่มีชุดสดในหน่วยความจำ → สั่งคำนวณเบื้องหลัง แล้วคืนของที่มีไปก่อน
+    refresh_pool("longterm")
+
+    # DB: Celery beat scan ตอน 07:30 TH เก็บใน signals table (ถ้ามี worker)
     rows = latest_signals_by_kind(settings.database_url, kind="longterm", limit=limit)
     if rows:
         # recommendation JSONB holds the full longterm dict from _save_longterm_to_signals.
@@ -716,14 +745,12 @@ def get_longterm_signal_dicts(limit: int = 10) -> list[dict]:
     if cached:
         return cached[:limit]
 
-    # แคชในหน่วยความจำจากรอบก่อน (ยังไม่หมดอายุ 6 ชม.)
-    memory = _LONGTERM_CACHE["data"]
+    # แคชในหน่วยความจำรอบก่อน (หมดอายุแล้ว แต่ยังดีกว่าว่าง) — ระหว่างรอชุดใหม่
     if memory:
         return memory[:limit]
 
-    # ไม่มีข้อมูลเลย → สั่งคำนวณเบื้องหลังแล้วคืนว่างไปก่อน หน้าเว็บจะถามซ้ำเอง
+    # ไม่มีข้อมูลเลย → คืนว่างไปก่อน หน้าเว็บจะถามซ้ำเอง
     # (ดึงประวัติ 1 ปีของหุ้นทั้งชุดใช้เวลาหลายสิบวินาที นานเกินกว่าจะให้ request รอ)
-    start_background_refresh("longterm", lambda: _longterm_pool(force=True))
     return []
 
 
@@ -762,14 +789,20 @@ def get_signal_dict(signal_id: int) -> dict | None:
 
 async def analyze_stock_query(query: str) -> dict:
     settings = get_settings()
-    stock = _resolve_stock(query)
-    market_data = get_market_data_provider(use_live_data=settings.use_live_data)
-    news_provider = get_news_provider(use_live_data=settings.use_live_data)
-    snapshot = market_data.get_snapshot(stock.symbol)
-    # quote ไม่มีฐานวอลุ่ม/high ย้อนหลัง → เติมจากแท่งราคาจริงก่อนให้คะแนน
-    snapshot = _enrich_with_history([(stock, snapshot, 0.0)])[0][1]
-    news_items = news_provider.get_company_news(stock.symbol)
-    signal = build_signal(stock, snapshot, news_items)
+
+    def _gather() -> tuple:
+        stock = _resolve_stock(query)
+        market_data = get_market_data_provider(use_live_data=settings.use_live_data)
+        news_provider = get_news_provider(use_live_data=settings.use_live_data)
+        snapshot = market_data.get_snapshot(stock.symbol)
+        # quote ไม่มีฐานวอลุ่ม/high ย้อนหลัง → เติมจากแท่งราคาจริงก่อนให้คะแนน
+        snapshot = _enrich_with_history([(stock, snapshot, 0.0)])[0][1]
+        news_items = news_provider.get_company_news(stock.symbol)
+        return stock, news_items, build_signal(stock, snapshot, news_items)
+
+    # ดึงราคา/ประวัติ/ข่าวเป็น I/O แบบ blocking 10-30 วินาที — ถ้ารันตรงใน event loop
+    # ทั้ง server (รวม webhook ของบอทและหน้าเว็บ) จะค้างจนกว่าจะเสร็จ
+    stock, news_items, signal = await asyncio.to_thread(_gather)
     analysis_text, analysis_source = await analyze_stock_with_ai(
         stock,
         signal,

@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
@@ -46,19 +47,36 @@ def change_percent(snapshot: MarketSnapshot) -> float:
 # ── watchlist ────────────────────────────────────────────────────────────────
 
 
-def watch_add(chat_id: str, symbol: str, target_price: float | None) -> bool:
+def _latest_snapshot(symbol: str) -> MarketSnapshot | None:
+    """ราคาล่าสุดของหุ้นหนึ่งตัว — None ถ้าไม่พบ symbol นี้ในผู้ให้บริการข้อมูล."""
     settings = get_settings()
+    try:
+        snapshot = get_market_data_provider(use_live_data=settings.use_live_data).get_snapshot(symbol)
+    except Exception:
+        return None
+    return snapshot if snapshot and snapshot.latest_price > 0 else None
+
+
+def watch_add(chat_id: str, symbol: str, target_price: float | None) -> dict:
+    """เพิ่มหุ้นเข้ารายการเฝ้าดู — ตรวจก่อนว่ามีหุ้นตัวนี้จริง ไม่งั้นจะเก็บ symbol ผิด ๆ
+    ไว้แล้วเฝ้าดูไปตลอดโดยไม่มีราคา.
+
+    คืน {"status": "ok" | "not_found" | "db_error", "direction", "price"}
+    """
+    snapshot = _latest_snapshot(symbol)
+    if snapshot is None:
+        return {"status": "not_found", "direction": None, "price": None}
+
+    # ตั้งราคาต่ำกว่าราคาปัจจุบัน = ผู้ใช้อยากรู้ตอน "ย่อลงมาถึง"
     direction = "above"
-    if target_price is not None:
-        try:
-            snapshot = get_market_data_provider(
-                use_live_data=settings.use_live_data
-            ).get_snapshot(symbol)
-            # ตั้งราคาต่ำกว่าราคาปัจจุบัน = ผู้ใช้อยากรู้ตอน "ย่อลงมาถึง"
-            direction = "below" if target_price < snapshot.latest_price else "above"
-        except Exception:
-            direction = "above"
-    return add_watch(settings.database_url, chat_id, symbol, target_price, direction)
+    if target_price is not None and target_price < snapshot.latest_price:
+        direction = "below"
+    saved = add_watch(get_settings().database_url, chat_id, symbol, target_price, direction)
+    return {
+        "status": "ok" if saved else "db_error",
+        "direction": direction,
+        "price": snapshot.latest_price,
+    }
 
 
 def watch_remove(chat_id: str, symbol: str) -> bool:
@@ -134,8 +152,12 @@ def check_price_alerts() -> list[dict]:
 # ── พอร์ตจำลอง ───────────────────────────────────────────────────────────────
 
 
-def portfolio_add(chat_id: str, symbol: str, quantity: float, cost_basis: float) -> bool:
-    return add_position(get_settings().database_url, chat_id, symbol, quantity, cost_basis)
+def portfolio_add(chat_id: str, symbol: str, quantity: float, cost_basis: float) -> dict:
+    """คืน {"status": "ok" | "not_found" | "db_error", "position": {...} | None}."""
+    if _latest_snapshot(symbol) is None:
+        return {"status": "not_found", "position": None}
+    position = add_position(get_settings().database_url, chat_id, symbol, quantity, cost_basis)
+    return {"status": "ok" if position else "db_error", "position": position}
 
 
 def portfolio_remove(chat_id: str, symbol: str) -> bool:
@@ -154,8 +176,24 @@ def portfolio_summary(chat_id: str) -> dict:
         snapshot = snapshots.get(position["symbol"].upper())
         quantity = float(position["quantity"])
         cost_basis = float(position["cost_basis"])
-        price = snapshot.latest_price if snapshot else cost_basis
         cost = quantity * cost_basis
+        if snapshot is None or snapshot.latest_price <= 0:
+            # ไม่มีราคา = ไม่รู้กำไร/ขาดทุน — ห้ามเอาต้นทุนมาแทนราคาแล้วโชว์ 0% เหมือนจริง
+            # และไม่นับรวมในยอดรวม ไม่งั้นยอดรวมจะผิดไปด้วย
+            rows.append(
+                {
+                    "symbol": position["symbol"],
+                    "quantity": quantity,
+                    "cost_basis": cost_basis,
+                    "price": None,
+                    "value": None,
+                    "pl": None,
+                    "pl_percent": None,
+                    "priced": False,
+                }
+            )
+            continue
+        price = snapshot.latest_price
         value = quantity * price
         total_cost += cost
         total_value += value
@@ -168,11 +206,11 @@ def portfolio_summary(chat_id: str) -> dict:
                 "value": value,
                 "pl": value - cost,
                 "pl_percent": ((price - cost_basis) / cost_basis * 100) if cost_basis > 0 else 0.0,
-                "priced": snapshot is not None,
+                "priced": True,
             }
         )
 
-    rows.sort(key=lambda item: item["pl"], reverse=True)
+    rows.sort(key=lambda item: (item["priced"], item["pl"] or 0.0), reverse=True)
     return {
         "positions": rows,
         "total_cost": total_cost,
@@ -265,7 +303,8 @@ async def send_price_alerts() -> dict:
     if not telegram.is_configured:
         return {"checked": 0, "sent": 0, "error": "telegram not configured"}
 
-    triggered = check_price_alerts()
+    # ดึงราคาจากผู้ให้บริการเป็น I/O แบบ blocking — ทำในเธรดแยกไม่ให้ server ค้าง
+    triggered = await asyncio.to_thread(check_price_alerts)
     sent = 0
     for alert in triggered:
         direction = "ขึ้นถึง" if alert["direction"] == "above" else "ย่อลงถึง"
