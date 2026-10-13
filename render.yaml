@@ -44,7 +44,7 @@ services:
       - key: GEMINI_MODEL
         value: gemini-3-flash-preview
       - key: GEMINI_FALLBACK_MODELS
-        value: gemini-3-flash-preview,gemini-2.5-flash
+        value: gemini-3-flash-preview,gemini-3.8-flash,gemini-2.5-flash
       - key: LOG_LEVEL
         value: INFO
       - key: SURGE_UNIVERSE_MODE
