@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * วงแหวนโอกาส — meter สำหรับ "ค่าหนึ่งค่าเทียบเพดาน" (0-100%)
+ * วงแหวน meter สำหรับ "ค่าหนึ่งค่าเทียบเพดาน" (0-100)
  * รางเป็นสีเดียวกับหลอดแต่จางกว่า เพื่อให้อ่านสถานะได้ทั้งวง
  */
 
@@ -12,6 +12,8 @@ type GaugeRingProps = {
   label?: string;
   /** ตัวเลขใหญ่กลางวง — ปิดได้เมื่อใช้เป็นวงเล็กในลิสต์ */
   showValue?: boolean;
+  /** หน่วยต่อท้ายตัวเลข เช่น "%" หรือ "/100" (คะแนน ไม่ใช่ความน่าจะเป็น) */
+  unit?: string;
 };
 
 /**
@@ -33,7 +35,8 @@ export function GaugeRing({
   size = 132,
   strokeWidth = 10,
   label,
-  showValue = true
+  showValue = true,
+  unit = "%"
 }: GaugeRingProps) {
   const safe = Math.max(0, Math.min(100, value));
   const { stroke, track } = tone(safe);
@@ -50,7 +53,7 @@ export function GaugeRing({
       className="relative inline-flex items-center justify-center"
       style={{ width: size, height: size }}
       role="img"
-      aria-label={`${label ?? "โอกาส"} ${Math.round(safe)} เปอร์เซ็นต์`}
+      aria-label={`${label ?? "ค่า"} ${Math.round(safe)}${unit === "%" ? " เปอร์เซ็นต์" : ` ${unit}`}`}
     >
       <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} aria-hidden="true">
         {/* หมุนให้ช่องว่างอยู่ด้านล่าง */}
@@ -88,7 +91,7 @@ export function GaugeRing({
           >
             {Math.round(safe)}
             <span className="text-ink-muted" style={{ fontSize: size * 0.14 }}>
-              %
+              {unit}
             </span>
           </span>
           {label ? (

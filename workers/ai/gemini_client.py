@@ -53,6 +53,8 @@ async def generate_gemini(
     model: str,
     temperature: float,
     response_mime_type: str | None = None,
+    response_schema: dict | None = None,
+    thinking_level: str | None = None,
     timeout: float = 60.0,
 ) -> GeminiResult:
     if not api_key:
@@ -68,6 +70,8 @@ async def generate_gemini(
                 model=candidate,
                 temperature=temperature,
                 response_mime_type=response_mime_type,
+                response_schema=response_schema,
+                thinking_level=thinking_level,
                 timeout=timeout,
             )
         except GeminiGenerationError as exc:
@@ -115,11 +119,20 @@ async def _generate_once(
     temperature: float,
     response_mime_type: str | None,
     timeout: float,
+    response_schema: dict | None = None,
+    thinking_level: str | None = None,
 ) -> str:
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     generation_config: dict = {"temperature": temperature}
-    if response_mime_type:
+    if response_schema:
+        # บังคับรูปแบบ JSON ที่ฝั่ง API — ไม่ต้องหวังให้โมเดลทำตามคำสั่งใน prompt เอง
+        generation_config["responseMimeType"] = "application/json"
+        generation_config["responseSchema"] = response_schema
+    elif response_mime_type:
         generation_config["responseMimeType"] = response_mime_type
+    # thinkingLevel มีเฉพาะรุ่น 3.x — รุ่น 2.5 ใช้ thinkingBudget และจะตอบ 400 ถ้าส่งไป
+    if thinking_level and model.startswith("gemini-3"):
+        generation_config["thinkingConfig"] = {"thinkingLevel": thinking_level}
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": generation_config,

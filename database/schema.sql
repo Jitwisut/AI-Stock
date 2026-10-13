@@ -202,3 +202,29 @@ CREATE TABLE IF NOT EXISTS ai_analysis_cache (
     output JSONB NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- ผลคัด "หุ้นน่าสนใจวันนี้" ทุกรอบ (ทั้งตัวที่ผ่านด่านแรก ไม่ใช่แค่ตัวที่แสดง) ไว้วัดผลย้อนหลัง
+-- ว่าคะแนน AI ดีกว่าคะแนนกฎไหม · หนึ่งแถวต่อ (วันทำการ, หุ้น) เก็บรอบที่ "ดีที่สุด" ของวัน
+-- (quality: สร้างตอนตลาดปิด +2, มีคะแนน AI +1) · market_open = สร้างระหว่างตลาดเปิด ไม่ใช้วัดผล
+-- คะแนน AI ของวันทำการเดียวกันถูกใช้ซ้ำ (ข้อมูล EOD ไม่เปลี่ยนจนปิดตลาดรอบถัดไป) → AI ~1 ครั้ง/วัน
+CREATE TABLE IF NOT EXISTS pick_snapshots (
+    id BIGSERIAL PRIMARY KEY,
+    session_date DATE NOT NULL,
+    symbol TEXT NOT NULL,
+    generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    market_open BOOLEAN NOT NULL DEFAULT FALSE,
+    quality SMALLINT NOT NULL DEFAULT 0,
+    prescreen_rank INTEGER,
+    in_shortlist BOOLEAN NOT NULL DEFAULT FALSE,
+    rule_score NUMERIC,
+    ai_score NUMERIC,
+    final_score NUMERIC,
+    final_rank INTEGER,
+    ai_model TEXT,
+    score_breakdown JSONB,
+    -- reason / catalyst / risk ที่ AI เขียน — ใช้ซ้ำได้ทั้งวันทำการ ไม่ต้องเรียก AI ใหม่
+    ai_notes JSONB,
+    UNIQUE (session_date, symbol)
+);
+
+CREATE INDEX IF NOT EXISTS idx_pick_snapshots_session ON pick_snapshots (session_date);

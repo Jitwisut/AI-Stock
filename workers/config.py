@@ -139,7 +139,7 @@ def get_settings() -> Settings:
         gemini_api_key=os.getenv("GEMINI_API_KEY") or None,
         ai_provider=os.getenv("AI_PROVIDER", "gemini").lower(),
         openai_model=os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),
-        gemini_model=os.getenv("GEMINI_MODEL", "gemini-3.1-pro-preview"),
+        gemini_model=os.getenv("GEMINI_MODEL", "gemini-3-flash-preview"),
         finnhub_api_key=os.getenv("FINNHUB_API_KEY") or None,
         polygon_api_key=os.getenv("POLYGON_API_KEY") or None,
         admin_api_key=os.getenv("ADMIN_API_KEY") or None,

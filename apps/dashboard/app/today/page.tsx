@@ -27,9 +27,14 @@ type DailyPick = {
   sector?: string | null;
   price: number;
   change_percent: number;
-  relative_volume: number;
+  /** null = ไม่มีฐานวอลุ่มให้เทียบ */
+  relative_volume: number | null;
+  /** คะแนน 0-100 จากเกณฑ์ — API รุ่นก่อนส่งแค่ pop_probability (ค่าเดียวกัน) */
+  score?: number;
   pop_probability: number;
+  ai_score?: number | null;
   rule_score: number;
+  score_breakdown?: Record<string, { score: number | null; evidence: string }> | null;
   verdict: string;
   reason: string;
   catalyst: string;
@@ -38,10 +43,10 @@ type DailyPick = {
   rsi14: number | null;
   above_sma50: boolean;
   above_sma200: boolean;
-  position_in_52w_range_percent: number;
-  breakout_gap_percent: number;
-  return_3m_percent: number;
-  volatility_percent: number;
+  position_in_52w_range_percent: number | null;
+  breakout_gap_percent: number | null;
+  return_3m_percent: number | null;
+  volatility_percent: number | null;
   closes_20d: number[];
   bars?: Bar[];
   news: PickNews[];
@@ -50,6 +55,8 @@ type DailyPick = {
 type PicksResponse = {
   generated_at: string;
   analysis_source: string;
+  ai_status?: string;
+  ai_model?: string | null;
   picks: DailyPick[];
   universe_count: number;
   disclaimer: string;
@@ -76,6 +83,23 @@ function formatTime(iso: string): string {
   return Number.isNaN(date.getTime())
     ? "-"
     : date.toLocaleString("th-TH", { dateStyle: "short", timeStyle: "short" });
+}
+
+const CRITERIA_LABELS: Record<string, string> = {
+  trend_structure: "โครงสร้างเทรนด์",
+  relative_strength: "แข็งกว่าตลาด (เทียบ SPY)",
+  volume_confirmation: "วอลุ่มยืนยัน",
+  catalyst_quality: "ตัวกระตุ้น/ข่าว",
+  risk_control: "ความเสี่ยงต่ำ"
+};
+
+function signedPercent(value: number | null | undefined): string {
+  if (value == null) return "-";
+  return `${value >= 0 ? "+" : ""}${value.toFixed(1)}%`;
+}
+
+function pickScore(pick: DailyPick): number {
+  return pick.score ?? pick.pop_probability;
 }
 
 function verdictClass(verdict: string): string {
@@ -170,7 +194,7 @@ export default function TodayPage() {
             หุ้นน่าสนใจวันนี้
           </h1>
           <p className="mt-1.5 max-w-xl text-sm leading-6 text-ink-muted">
-            คัดจากโครงสร้างราคาและวอลุ่มผิดปกติ แล้วให้ AI อ่านกราฟกับข่าวจัดอันดับโอกาสวิ่งแรงระยะสั้น
+            คัดจากโครงสร้างราคาและวอลุ่มผิดปกติ แล้วให้ AI ให้คะแนนตามเกณฑ์ (เทรนด์ · ความแข็งเทียบตลาด · วอลุ่ม · ข่าว · ความเสี่ยง) สำหรับมุมมอง 1-5 วัน
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -255,7 +279,7 @@ export default function TodayPage() {
                   </div>
 
                   <div className="flex items-center gap-5">
-                    <GaugeRing value={active.pop_probability} size={140} label="โอกาสวิ่งแรง" />
+                    <GaugeRing value={pickScore(active)} size={140} label="คะแนน" unit="/100" />
                     <div className="min-w-0 space-y-1">
                       <div className="font-mono text-2xl font-semibold tabular-nums text-ink">
                         ${active.price.toFixed(2)}
@@ -277,6 +301,28 @@ export default function TodayPage() {
                   </div>
 
                   <p className="text-sm leading-6 text-ink-muted">{active.reason}</p>
+
+                  {active.score_breakdown ? (
+                    <ul className="space-y-1.5" aria-label="คะแนนรายเกณฑ์">
+                      {Object.entries(CRITERIA_LABELS).map(([key, label]) => {
+                        const item = active.score_breakdown?.[key];
+                        if (!item) return null;
+                        return (
+                          <li key={key} className="text-xs leading-5" title={item.evidence}>
+                            <span className="flex items-center justify-between gap-2">
+                              <span className="text-ink-muted">{label}</span>
+                              <span className="font-mono tabular-nums text-ink">
+                                {item.score === null ? "ไม่มีข้อมูล" : `${item.score}/5`}
+                              </span>
+                            </span>
+                            {item.evidence ? (
+                              <span className="block truncate text-[11px] text-ink-subtle">{item.evidence}</span>
+                            ) : null}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  ) : null}
 
                   <div className="space-y-2">
                     <div className="flex items-start gap-2 rounded-xl border border-bg-line bg-bg-base/40 px-3 py-2">
@@ -349,19 +395,19 @@ export default function TodayPage() {
                   <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                     <Metric
                       label="วอลุ่มเทียบเฉลี่ย"
-                      value={`${active.relative_volume.toFixed(2)}x`}
-                      tone={active.relative_volume >= 1.5 ? "gain" : "plain"}
+                      value={active.relative_volume == null ? "N/A" : `${active.relative_volume.toFixed(2)}x`}
+                      tone={(active.relative_volume ?? 0) >= 1.5 ? "gain" : "plain"}
                     />
                     <Metric label="RSI (14)" value={active.rsi14?.toFixed(0) ?? "-"} />
                     <Metric
                       label="ต่อแนวต้านเดิม"
-                      value={`${active.breakout_gap_percent >= 0 ? "+" : ""}${active.breakout_gap_percent.toFixed(1)}%`}
-                      tone={active.breakout_gap_percent >= 0 ? "gain" : "plain"}
+                      value={signedPercent(active.breakout_gap_percent)}
+                      tone={(active.breakout_gap_percent ?? -1) >= 0 ? "gain" : "plain"}
                     />
                     <Metric
                       label="ผลตอบแทน 3 เดือน"
-                      value={`${active.return_3m_percent >= 0 ? "+" : ""}${active.return_3m_percent.toFixed(1)}%`}
-                      tone={active.return_3m_percent >= 0 ? "gain" : "loss"}
+                      value={signedPercent(active.return_3m_percent)}
+                      tone={active.return_3m_percent == null ? "plain" : active.return_3m_percent >= 0 ? "gain" : "loss"}
                     />
                   </div>
 
@@ -427,7 +473,7 @@ export default function TodayPage() {
                         {index + 1}
                       </span>
                       <GaugeRing
-                        value={pick.pop_probability}
+                        value={pickScore(pick)}
                         size={54}
                         strokeWidth={5}
                         showValue={false}
@@ -438,7 +484,7 @@ export default function TodayPage() {
                             {pick.symbol}
                           </span>
                           <span className="font-mono text-sm font-semibold tabular-nums text-ink">
-                            {Math.round(pick.pop_probability)}%
+                            {Math.round(pickScore(pick))}
                           </span>
                         </span>
                         <span className="mt-0.5 flex items-center justify-between gap-2">
@@ -456,7 +502,7 @@ export default function TodayPage() {
                         </span>
                         <span className="mt-1 flex items-center gap-1 text-[10px] text-ink-subtle">
                           <Zap className="h-3 w-3" />
-                          วอลุ่ม {pick.relative_volume.toFixed(1)}x
+                          วอลุ่ม {pick.relative_volume == null ? "N/A" : `${pick.relative_volume.toFixed(1)}x`}
                         </span>
                       </span>
                     </button>

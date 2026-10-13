@@ -42,7 +42,7 @@ services:
       - key: AI_PROVIDER
         value: gemini
       - key: GEMINI_MODEL
-        value: gemini-3.1-pro-preview
+        value: gemini-3-flash-preview
       - key: GEMINI_FALLBACK_MODELS
         value: gemini-3-flash-preview,gemini-2.5-flash
       - key: LOG_LEVEL

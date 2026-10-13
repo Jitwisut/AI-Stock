@@ -476,13 +476,21 @@ async def daily_picks(
     limit: int = Query(default=10, ge=1, le=20),
     refresh: bool = Query(default=False),
 ) -> dict:
-    """หุ้นน่าสนใจวันนี้ — คัดจากโครงสร้างราคา+วอลุ่ม แล้วให้ Gemini อ่านกราฟ+ข่าวจัดอันดับ."""
+    """หุ้นน่าสนใจวันนี้ — คัดด้วยกฎ แล้วให้ Gemini ให้คะแนนตามเกณฑ์ (โค้ดรวมคะแนนเอง)."""
     from workers.daily_picks import get_daily_picks
 
     try:
         return await get_daily_picks(limit=limit, force=refresh)
     except MarketDataUnavailableError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.get("/picks/evaluation")
+async def picks_evaluation(top_n: int = Query(default=5, ge=1, le=10)) -> dict:
+    """ผลจริงของ "หุ้นน่าสนใจวันนี้" — คะแนน AI vs คะแนนกฎ vs SPY ที่ 1/3/5 วันทำการ."""
+    from workers.pick_tracking import evaluate_picks
+
+    return await asyncio.to_thread(evaluate_picks, top_n)
 
 
 @app.get("/signals", response_model=list[SignalOut])
@@ -799,15 +807,15 @@ def _analysis_buttons(symbol: str) -> Optional[dict]:
 
 def _format_daily_picks(data: dict) -> str:
     picks = data.get("picks") or []
-    source = "Gemini" if data.get("analysis_source") == "gemini" else "กฎเชิงเทคนิค"
-    lines = [f"✨ หุ้นน่าสนใจวันนี้ (จัดอันดับโดย {source})\n"]
+    source = "เกณฑ์ที่ Gemini ให้คะแนน" if data.get("analysis_source") == "gemini" else "กฎเชิงเทคนิค"
+    lines = [f"✨ หุ้นน่าสนใจวันนี้ (คะแนนจาก{source})\n"]
     if not picks:
         lines.append("— ยังไม่พบหุ้นที่เข้าเกณฑ์ —")
         return "\n".join(lines)
 
     for index, pick in enumerate(picks, 1):
         lines.append(
-            f"{index}. {pick.get('symbol', '?')} — โอกาสวิ่งแรง {round(_num(pick.get('pop_probability')))}% "
+            f"{index}. {pick.get('symbol', '?')} — คะแนน {round(_num(pick.get('score', pick.get('pop_probability'))))}/100 "
             f"[{pick.get('verdict', '-')}]"
         )
         lines.append(
